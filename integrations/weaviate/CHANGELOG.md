@@ -1,5 +1,28 @@
 # Changelog
 
+## [integrations/weaviate-v6.3.0] - 2025-10-03
+
+### 🚀 Features
+
+- Implement `delete_all_documents` for weaviate integration (#2354)
+
+
+### 🌀 Miscellaneous
+
+- Fix: Update version of weaviate in docker-compose file (#2347)
+
+## [integrations/weaviate-v6.2.0] - 2025-09-18
+
+### 🚀 Features
+
+- Weaviate Hybrid Retrieval (#2276)
+
+### 🧹 Chores
+
+- Remove black (#1985)
+- Standardize readmes - part 2 (#2205)
+
+
 ## [integrations/weaviate-v6.1.0] - 2025-06-20
 
 ### 🐛 Bug Fixes

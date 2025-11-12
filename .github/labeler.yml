@@ -1,4 +1,9 @@
 # Integrations
+integration:aimlapi:
+  - changed-files:
+      - any-glob-to-any-file: "integrations/aimlapi/**/*"
+      - any-glob-to-any-file: ".github/workflows/aimlapi.yml"
+
 integration:amazon-bedrock:
   - changed-files:
       - any-glob-to-any-file: "integrations/amazon_bedrock/**/*"
@@ -33,6 +38,11 @@ integration:cohere:
   - changed-files:
       - any-glob-to-any-file: "integrations/cohere/**/*"
       - any-glob-to-any-file: ".github/workflows/cohere.yml"
+
+integration:cometapi:
+  - changed-files:
+      - any-glob-to-any-file: "integrations/cometapi/**/*"
+      - any-glob-to-any-file: ".github/workflows/cometapi.yml"
 
 integration:deepeval:
   - changed-files:
@@ -69,10 +79,10 @@ integration:google-vertex:
       - any-glob-to-any-file: "integrations/google_vertex/**/*"
       - any-glob-to-any-file: ".github/workflows/google_vertex.yml"
 
-integration:instructor-embedders:
+integration:hanlp:
   - changed-files:
-      - any-glob-to-any-file: "integrations/instructor_embedders/**/*"
-      - any-glob-to-any-file: ".github/workflows/instructor_embedders.yml"
+      - any-glob-to-any-file: "integrations/hanlp/**/*"
+      - any-glob-to-any-file: ".github/workflows/hanlp.yml"
 
 integration:jina:
   - changed-files:
@@ -88,6 +98,11 @@ integration:llama_cpp:
   - changed-files:
       - any-glob-to-any-file: "integrations/llama_cpp/**/*"
       - any-glob-to-any-file: ".github/workflows/llama_cpp.yml"
+
+integration:llama_stack:
+  - changed-files:
+      - any-glob-to-any-file: "integrations/llama_stack/**/*"
+      - any-glob-to-any-file: ".github/workflows/llama_stack.yml"
 
 integration:mcp:
   - changed-files:
@@ -164,20 +179,30 @@ integration:stackit:
       - any-glob-to-any-file: "integrations/stackit/**/*"
       - any-glob-to-any-file: ".github/workflows/stackit.yml"
 
+integration:togetherai:
+  - changed-files:
+      - any-glob-to-any-file: "integrations/togetherai/**/*"
+      - any-glob-to-any-file: ".github/workflows/togetherai.yml"
+
 integration:unstructured-fileconverter:
   - changed-files:
       - any-glob-to-any-file: "integrations/unstructured/**/*"
       - any-glob-to-any-file: ".github/workflows/unstructured.yml"
+
+integration:watsonx:
+  - changed-files:
+      - any-glob-to-any-file: "integrations/watsonx/**/*"
+      - any-glob-to-any-file: ".github/workflows/watsonx.yml"      
 
 integration:weaviate:
   - changed-files:
       - any-glob-to-any-file: "integrations/weaviate/**/*"
       - any-glob-to-any-file: ".github/workflows/weaviate.yml"
 
-integration:weight_bias:
+integration:weights_and_biases_weave:
   - changed-files:
-      - any-glob-to-any-file: "integrations/weight_bias/**/*"
-      - any-glob-to-any-file: ".github/workflows/weight_bias.yml"
+      - any-glob-to-any-file: "integrations/weights_and_biases_weave/**/*"
+      - any-glob-to-any-file: ".github/workflows/weights_and_biases_weave.yml"
 
 # Topics
 topic:CI:

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+import logging
 import os
 from typing import List
 from unittest.mock import MagicMock, patch
@@ -625,6 +626,121 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
         with pytest.raises(ValueError):
             document_store._embedding_retrieval(query_embedding=[], distance=0.1, certainty=0.1)
 
+    def test_hybrid_retrieval(self, document_store):
+        document_store.write_documents(
+            [
+                Document(content="Haskell is a functional programming language", embedding=[1.0, 0.8, 0.2, 0.1]),
+                Document(content="Lisp is a functional programming language", embedding=[0.9, 0.7, 0.3, 0.2]),
+                Document(content="Exilir is a functional programming language", embedding=[0.8, 0.6, 0.4, 0.3]),
+                Document(content="F# is a functional programming language", embedding=[0.7, 0.5, 0.5, 0.4]),
+                Document(content="C# is a functional programming language", embedding=[0.6, 0.4, 0.6, 0.5]),
+                Document(content="C++ is an object oriented programming language", embedding=[0.1, 0.2, 0.8, 0.9]),
+                Document(content="Dart is an object oriented programming language", embedding=[0.2, 0.3, 0.7, 0.8]),
+                Document(content="Go is an object oriented programming language", embedding=[0.3, 0.4, 0.6, 0.7]),
+                Document(content="Python is a object oriented programming language", embedding=[0.4, 0.5, 0.5, 0.6]),
+                Document(content="Ruby is a object oriented programming language", embedding=[0.5, 0.6, 0.4, 0.5]),
+                Document(content="PHP is a object oriented programming language", embedding=[0.6, 0.7, 0.3, 0.4]),
+            ]
+        )
+        result = document_store._hybrid_retrieval("functional Haskell", query_embedding=[1.0, 0.8, 0.2, 0.1])
+        assert len(result) > 0
+        # Should find documents containing "functional" and similar to the embedding
+        assert result[0].content == "Haskell is a functional programming language"
+        assert result[0].score > 0.0
+
+    def test_hybrid_retrieval_with_filters(self, document_store):
+        document_store.write_documents(
+            [
+                Document(content="Haskell is a functional programming language", embedding=[1.0, 0.8, 0.2, 0.1]),
+                Document(content="Lisp is a functional programming language", embedding=[0.9, 0.7, 0.3, 0.2]),
+                Document(content="C++ is an object oriented programming language", embedding=[0.1, 0.2, 0.8, 0.9]),
+            ]
+        )
+        filters = {"field": "content", "operator": "==", "value": "Haskell is a functional programming language"}
+        result = document_store._hybrid_retrieval("functional", query_embedding=[1.0, 0.8, 0.2, 0.1], filters=filters)
+        assert len(result) == 1
+        assert result[0].content == "Haskell is a functional programming language"
+        assert result[0].score > 0.0
+
+    def test_hybrid_retrieval_with_topk(self, document_store):
+        document_store.write_documents(
+            [
+                Document(content="Haskell is a functional programming language", embedding=[1.0, 0.8, 0.2, 0.1]),
+                Document(content="Lisp is a functional programming language", embedding=[0.9, 0.7, 0.3, 0.2]),
+                Document(content="Exilir is a functional programming language", embedding=[0.8, 0.6, 0.4, 0.3]),
+                Document(content="F# is a functional programming language", embedding=[0.7, 0.5, 0.5, 0.4]),
+                Document(content="C# is a functional programming language", embedding=[0.6, 0.4, 0.6, 0.5]),
+            ]
+        )
+        result = document_store._hybrid_retrieval("functional", query_embedding=[1.0, 0.8, 0.2, 0.1], top_k=3)
+        assert len(result) == 3
+        assert all("functional" in doc.content for doc in result)
+        assert all(doc.score is not None and doc.score > 0.0 for doc in result)
+
+    def test_hybrid_retrieval_with_alpha(self, document_store):
+        document_store.write_documents(
+            [
+                Document(content="Haskell is a functional programming language", embedding=[1.0, 0.8, 0.2, 0.1]),
+                Document(content="Lisp is a functional programming language", embedding=[0.9, 0.7, 0.3, 0.2]),
+                Document(content="C++ is an object oriented programming language", embedding=[0.1, 0.2, 0.8, 0.9]),
+            ]
+        )
+        # Test with alpha=0.0 (pure BM25)
+        result_bm25 = document_store._hybrid_retrieval("functional", query_embedding=[1.0, 0.8, 0.2, 0.1], alpha=0.0)
+        assert len(result_bm25) > 0
+        assert result_bm25[0].score > 0.0
+
+        # Test with alpha=1.0 (pure vector search)
+        result_vector = document_store._hybrid_retrieval("functional", query_embedding=[1.0, 0.8, 0.2, 0.1], alpha=1.0)
+        assert len(result_vector) > 0
+        assert result_vector[0].score > 0.0
+
+        # Test with alpha=0.5 (balanced hybrid)
+        result_hybrid = document_store._hybrid_retrieval("functional", query_embedding=[1.0, 0.8, 0.2, 0.1], alpha=0.5)
+        assert len(result_hybrid) > 0
+        assert result_hybrid[0].score > 0.0
+
+    def test_hybrid_retrieval_with_max_vector_distance(self, document_store):
+        document_store.write_documents(
+            [
+                Document(content="Haskell is a functional programming language", embedding=[1.0, 0.8, 0.2, 0.1]),
+                Document(content="Lisp is a functional programming language", embedding=[0.9, 0.7, 0.3, 0.2]),
+                Document(content="C++ is an object oriented programming language", embedding=[0.1, 0.2, 0.8, 0.9]),
+            ]
+        )
+        # Use a restrictive max_vector_distance to limit results
+        result = document_store._hybrid_retrieval(
+            "functional", query_embedding=[1.0, 0.8, 0.2, 0.1], max_vector_distance=0.5
+        )
+        assert len(result) >= 1  # Should find at least the closest match
+        assert all(doc.score is not None and doc.score > 0.0 for doc in result)
+
+    def test_hybrid_retrieval_empty_query(self, document_store):
+        document_store.write_documents(
+            [
+                Document(content="Test document", embedding=[1.0, 0.8, 0.2, 0.1]),
+            ]
+        )
+        # Test with empty query string
+        result = document_store._hybrid_retrieval("", query_embedding=[1.0, 0.8, 0.2, 0.1])
+        assert len(result) >= 0  # Should handle empty query gracefully
+
+    def test_hybrid_retrieval_combined_parameters(self, document_store):
+        document_store.write_documents(
+            [
+                Document(content="Haskell is a functional programming language", embedding=[1.0, 0.8, 0.2, 0.1]),
+                Document(content="Lisp is a functional programming language", embedding=[0.9, 0.7, 0.3, 0.2]),
+                Document(content="Exilir is a functional programming language", embedding=[0.8, 0.6, 0.4, 0.3]),
+                Document(content="C++ is an object oriented programming language", embedding=[0.1, 0.2, 0.8, 0.9]),
+            ]
+        )
+        # Test combining multiple parameters
+        result = document_store._hybrid_retrieval(
+            "functional", query_embedding=[1.0, 0.8, 0.2, 0.1], top_k=2, alpha=0.7, max_vector_distance=0.8
+        )
+        assert len(result) <= 2  # Should respect top_k limit
+        assert all(doc.score is not None and doc.score > 0.0 for doc in result)
+
     def test_filter_documents_below_default_limit(self, document_store):
         docs = []
         for index in range(9998):
@@ -679,3 +795,41 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
     def test_connect_to_embedded(self):
         document_store = WeaviateDocumentStore(embedded_options=EmbeddedOptions())
         assert document_store.client
+
+    def test_delete_all_documents(self, document_store):
+        docs = [Document(content="test doc 1"), Document(content="test doc 2")]
+        assert document_store.write_documents(docs) == 2
+        assert document_store.count_documents() == 2
+        document_store.delete_all_documents()
+        assert document_store.count_documents() == 0
+
+    def test_delete_all_documents_recreate(self, document_store):
+        docs = [Document(content="test doc 1"), Document(content="test doc 2")]
+        assert document_store.write_documents(docs) == 2
+        assert document_store.count_documents() == 2
+
+        cls = document_store._collection_settings["class"]
+        collection = document_store.client.collections.get(cls)
+        previous_config = collection.config.get().to_dict()
+
+        document_store.delete_all_documents(recreate_index=True)
+        assert document_store.count_documents() == 0
+
+        new_config = document_store.client.collections.get(cls).config.get().to_dict()
+        assert previous_config == new_config
+
+    def test_delete_all_documents_batch_size(self, document_store):
+        docs = [Document(content=str(i)) for i in range(0, 5)]
+        assert document_store.write_documents(docs) == 5
+        document_store.delete_all_documents(batch_size=2)
+        assert document_store.count_documents() == 0
+
+    def test_delete_all_documents_excessive_batch_size(self, document_store, caplog):
+        """Test that the deletion is not complete if the batch size exceeds the QUERY_MAXIMUM_RESULTS."""
+        # assume QUERY_MAXIMUM_RESULTS == 10000 with standard deployment
+        docs = [Document(content=str(i)) for i in range(0, 10005)]
+        assert document_store.write_documents(docs) == 10005
+        with caplog.at_level(logging.WARNING):
+            document_store.delete_all_documents(batch_size=20000)
+        assert document_store.count_documents() == 5
+        assert "Not all documents have been deleted." in caplog.text

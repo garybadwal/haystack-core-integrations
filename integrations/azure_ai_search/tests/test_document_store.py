@@ -4,7 +4,6 @@
 import os
 import random
 from datetime import datetime, timezone
-from typing import List
 from unittest.mock import patch
 
 import pytest
@@ -231,12 +230,36 @@ def test_init(_mock_azure_search_client):
     assert document_store._vector_search_configuration == DEFAULT_VECTOR_SEARCH
 
 
+def _assert_documents_are_equal(received: list[Document], expected: list[Document]):
+    """
+    Assert that two lists of Documents are equal.
+
+    This is used in every test, if a Document Store implementation has a different behaviour
+    it should override this method. This can happen for example when the Document Store sets
+    a score to returned Documents. Since we can't know what the score will be, we can't compare
+    the Documents reliably.
+    """
+    sorted_received = sorted(received, key=lambda doc: doc.id)
+    sorted_expected = sorted(expected, key=lambda doc: doc.id)
+    assert len(sorted_received) == len(sorted_expected)
+
+    for received_doc, expected_doc in zip(sorted_received, sorted_expected):
+        # Compare all attributes except score
+        assert received_doc.id == expected_doc.id
+        assert received_doc.content == expected_doc.content
+        assert received_doc.embedding == expected_doc.embedding
+        assert received_doc.meta == expected_doc.meta
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(
     not os.environ.get("AZURE_AI_SEARCH_ENDPOINT", None) and not os.environ.get("AZURE_AI_SEARCH_API_KEY", None),
     reason="Missing AZURE_AI_SEARCH_ENDPOINT or AZURE_AI_SEARCH_API_KEY.",
 )
 class TestDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDocumentsTest):
+    def assert_documents_are_equal(self, received: list[Document], expected: list[Document]):
+        _assert_documents_are_equal(received, expected)
+
     def test_write_documents(self, document_store: AzureAISearchDocumentStore):
         docs = [Document(id="1")]
         assert document_store.write_documents(docs) == 1
@@ -267,6 +290,19 @@ class TestDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDocumentsT
     @pytest.mark.skip(reason="Azure AI search index overwrites duplicate documents by default")
     def test_write_documents_duplicate_skip(self, document_store: AzureAISearchDocumentStore): ...
 
+    def test_delete_all_documents(self, document_store: AzureAISearchDocumentStore):
+        docs = [Document(content="first doc"), Document(content="second doc")]
+        document_store.write_documents(docs)
+        assert document_store.count_documents() == 2
+
+        document_store.delete_all_documents()
+        assert document_store.count_documents() == 0
+
+    def test_delete_all_documents_empty_index(self, document_store: AzureAISearchDocumentStore):
+        assert document_store.count_documents() == 0
+        document_store.delete_all_documents()
+        assert document_store.count_documents() == 0
+
 
 def _random_embeddings(n):
     return [round(random.random(), 7) for _ in range(n)]  # nosec: S311
@@ -291,7 +327,7 @@ TEST_EMBEDDING_2 = _random_embeddings(768)
 class TestFilters(FilterDocumentsTest):
     # Overriding to change "date" to compatible ISO 8601 format
     @pytest.fixture
-    def filterable_docs(self) -> List[Document]:
+    def filterable_docs(self) -> list[Document]:
         """Fixture that returns a list of Documents that can be used to test filtering."""
         documents = []
         for i in range(3):
@@ -344,18 +380,8 @@ class TestFilters(FilterDocumentsTest):
         return documents
 
     # Overriding to compare the documents with the same order
-    def assert_documents_are_equal(self, received: List[Document], expected: List[Document]):
-        """
-        Assert that two lists of Documents are equal.
-
-        This is used in every test, if a Document Store implementation has a different behaviour
-        it should override this method. This can happen for example when the Document Store sets
-        a score to returned Documents. Since we can't know what the score will be, we can't compare
-        the Documents reliably.
-        """
-        sorted_recieved = sorted(received, key=lambda doc: doc.id)
-        sorted_expected = sorted(expected, key=lambda doc: doc.id)
-        assert sorted_recieved == sorted_expected
+    def assert_documents_are_equal(self, received: list[Document], expected: list[Document]):
+        _assert_documents_are_equal(received, expected)
 
     # Azure search index supports UTC datetime in ISO 8601 format
     def test_comparison_greater_than_with_iso_date(self, document_store, filterable_docs):

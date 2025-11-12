@@ -14,6 +14,7 @@ from dataclasses import dataclass, fields
 from datetime import timedelta
 from typing import Any, cast
 
+import anyio
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from exceptiongroup import ExceptionGroup
 from haystack import logging
@@ -28,8 +29,34 @@ from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
+from mcp.shared.message import SessionMessage
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_headers(headers: dict[str, str | Secret] | None) -> dict[str, str] | None:
+    """
+    Resolve Secret values in headers dictionary and warn about None values.
+
+    :param headers: Dictionary of headers, potentially containing Secret objects
+    :returns: Dictionary with resolved string values, or None if input is None
+    """
+    if not headers:
+        return None
+
+    resolved_headers = {}
+    for key, value in headers.items():
+        resolved_value = value.resolve_value() if isinstance(value, Secret) else value
+        if resolved_value is None:
+            logger.warning(
+                f"Header '{key}' resolved to None. This may indicate a misconfiguration. "
+                f"The header will be set to an empty string."
+            )
+            resolved_headers[key] = ""
+        else:
+            resolved_headers[key] = resolved_value
+
+    return resolved_headers
 
 
 class AsyncExecutor:
@@ -120,7 +147,7 @@ class AsyncExecutor:
         # use it to control the coroutine.
         return future, stop_event_promise.result(timeout)
 
-    def shutdown(self, timeout: float = 2):
+    def shutdown(self, timeout: float = 2) -> None:
         """
         Shut down the background event loop and thread.
 
@@ -191,8 +218,7 @@ class MCPInvocationError(ToolInvocationError):
         :param tool_name: Name of the tool that was being invoked
         :param tool_args: Arguments that were passed to the tool
         """
-        super().__init__(message)
-        self.tool_name = tool_name
+        super().__init__(message=message, tool_name=tool_name)
         self.tool_args = tool_args or {}
 
 
@@ -204,14 +230,17 @@ class MCPClient(ABC):
     regardless of the transport mechanism used.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 30.0) -> None:
         self.session: ClientSession | None = None
         self.exit_stack: AsyncExitStack = AsyncExitStack()
-        self.stdio: MemoryObjectReceiveStream[types.JSONRPCMessage | Exception] | None = None
-        self.write: MemoryObjectSendStream[types.JSONRPCMessage] | None = None
+        self.stdio: MemoryObjectReceiveStream[SessionMessage | Exception] | None = None
+        self.write: MemoryObjectSendStream[SessionMessage] | None = None
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+        self.max_delay = max_delay
 
     @abstractmethod
-    async def connect(self) -> list[Tool]:
+    async def connect(self) -> list[types.Tool]:
         """
         Connect to an MCP server.
 
@@ -234,19 +263,74 @@ class MCPClient(ABC):
             message = "Not connected to an MCP server"
             raise MCPConnectionError(message=message, operation="call_tool")
 
-        try:
-            result = await self.session.call_tool(tool_name, tool_args)
-            if result.isError:
-                message = f"Tool '{tool_name}' returned an error: {result.content!s}"
-                raise MCPInvocationError(message=message, tool_name=tool_name)
-            return result.model_dump_json()
-        except MCPError:
-            # Re-raise specific MCP errors directly
-            raise
-        except Exception as e:
-            # Wrap other exceptions with context about which tool failed
-            message = f"Failed to invoke tool '{tool_name}' with args: {tool_args} , got error: {e!s}"
-            raise MCPInvocationError(message, tool_name, tool_args) from e
+        # Implement retry logic with exponential backoff for connection-related errors
+        for attempt in range(self.max_retries + 1):  # +1 for initial attempt
+            try:
+                result = await self.session.call_tool(tool_name, tool_args)
+                if result.isError:
+                    message = f"Tool '{tool_name}' returned an error: {result.content!s}"
+                    raise MCPInvocationError(message=message, tool_name=tool_name)
+                return result.model_dump_json()
+            except MCPError:
+                # Re-raise specific MCP errors directly (these are not connection issues)
+                raise
+            except (anyio.ClosedResourceError, ConnectionError, OSError) as e:
+                error_type = type(e).__name__
+                error_msg = str(e) if str(e) else "Connection closed unexpectedly"
+
+                # Don't retry on the last attempt
+                if attempt >= self.max_retries:
+                    message = (
+                        f"Tool '{tool_name}' failed after {self.max_retries} reconnection attempts. "
+                        f"Last error: {error_type}: {error_msg}. "
+                        f"Consider recreating the MCPTool instance or checking server availability."
+                    )
+                    raise MCPInvocationError(message, tool_name, tool_args) from e
+
+                # Only attempt reconnection for SSE/HTTP transports (if available)
+                if isinstance(self, SSEClient | StreamableHttpClient) and (
+                    sse_client is not None or streamablehttp_client is not None
+                ):
+                    logger.warning(f"Connection lost during tool call '{tool_name}': {error_type}: {error_msg}")
+
+                    try:
+                        # Exponential backoff before reconnection attempt
+                        if attempt > 0:
+                            delay = min(self.base_delay * (2 ** (attempt - 1)), self.max_delay)
+                            logger.info(f"Waiting {delay}s before reconnection attempt {attempt + 1}")
+                            await asyncio.sleep(delay)
+
+                        logger.info(f"Attempting reconnection {attempt + 1}/{self.max_retries}")
+                        await self.connect()
+                        logger.info(f"Reconnection {attempt + 1} successful")
+                        # Continue to next iteration to retry the tool call
+
+                    except Exception as reconnect_error:
+                        logger.error(f"Reconnection attempt {attempt + 1} failed: {reconnect_error}")
+                        if attempt >= self.max_retries - 1:  # This was the last reconnection attempt
+                            message = (
+                                f"Tool '{tool_name}' failed and all {self.max_retries} reconnection attempts failed. "
+                                f"Original error: {error_type}: {error_msg}. "
+                                f"Final reconnection error: {reconnect_error}. "
+                                f"Try recreating the MCPTool instance."
+                            )
+                            raise MCPInvocationError(message, tool_name, tool_args) from e
+                        # Continue to next iteration for another reconnection attempt
+                else:
+                    # For non-HTTP transports, don't attempt reconnection
+                    message = (
+                        f"Connection lost during tool call '{tool_name}': {error_type}: {error_msg}. "
+                        f"For STDIO connections, try recreating the MCPTool instance."
+                    )
+                    raise MCPInvocationError(message, tool_name, tool_args) from e
+            except Exception as e:
+                # Handle other exceptions with meaningful error messages
+                error_description = str(e) if str(e) else f"Unknown {type(e).__name__} error"
+                message = f"Failed to invoke tool '{tool_name}' with args: {tool_args}, got error: {error_description}"
+                raise MCPInvocationError(message, tool_name, tool_args) from e
+
+        message = f"Tool '{tool_name}' failed unexpectedly after all retry attempts"
+        raise MCPInvocationError(message, tool_name, tool_args)
 
     async def aclose(self) -> None:
         """
@@ -270,10 +354,16 @@ class MCPClient(ABC):
     async def _initialize_session_with_transport(
         self,
         transport_tuple: tuple[
-            MemoryObjectReceiveStream[types.JSONRPCMessage | Exception], MemoryObjectSendStream[types.JSONRPCMessage]
+            MemoryObjectReceiveStream[SessionMessage | Exception],
+            MemoryObjectSendStream[SessionMessage],
+        ]
+        | tuple[
+            MemoryObjectReceiveStream[SessionMessage | Exception],
+            MemoryObjectSendStream[SessionMessage],
+            Any,
         ],
         connection_type: str,
-    ) -> list[Tool]:
+    ) -> list[types.Tool]:
         """
         Common session initialization logic for all transports.
 
@@ -306,26 +396,36 @@ class StdioClient(MCPClient):
     MCP client that connects to servers using stdio transport.
     """
 
-    def __init__(self, command: str, args: list[str] | None = None, env: dict[str, str | Secret] | None = None) -> None:
+    def __init__(
+        self,
+        command: str,
+        args: list[str] | None = None,
+        env: dict[str, str | Secret] | None = None,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        max_delay: float = 30.0,
+    ) -> None:
         """
         Initialize a stdio MCP client.
 
         :param command: Command to run (e.g., "python", "node")
         :param args: Arguments to pass to the command
         :param env: Environment variables for the command
+        :param max_retries: Maximum number of reconnection attempts
+        :param base_delay: Base delay for exponential backoff in seconds
         """
-        super().__init__()
+        super().__init__(max_retries=max_retries, base_delay=base_delay, max_delay=max_delay)
         self.command: str = command
         self.args: list[str] = args or []
         # Resolve Secret values in environment variables
         self.env: dict[str, str] | None = None
         if env:
             self.env = {
-                key: value.resolve_value() if isinstance(value, Secret) else value for key, value in env.items()
+                key: (value.resolve_value() if isinstance(value, Secret) else value) or "" for key, value in env.items()
             }
         logger.debug(f"PROCESS: Created StdioClient for command: {command} {' '.join(self.args or [])}")
 
-    async def connect(self) -> list[Tool]:
+    async def connect(self) -> list[types.Tool]:
         """
         Connect to an MCP server using stdio transport.
 
@@ -344,13 +444,17 @@ class SSEClient(MCPClient):
     MCP client that connects to servers using SSE transport.
     """
 
-    def __init__(self, server_info: "SSEServerInfo") -> None:
+    def __init__(
+        self, server_info: "SSEServerInfo", max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 30.0
+    ) -> None:
         """
         Initialize an SSE MCP client using server configuration.
 
         :param server_info: Configuration object containing URL, token, timeout, etc.
+        :param max_retries: Maximum number of reconnection attempts
+        :param base_delay: Base delay for exponential backoff in seconds
         """
-        super().__init__()
+        super().__init__(max_retries=max_retries, base_delay=base_delay, max_delay=max_delay)
 
         # in post_init we validate the url and set the url field so it is guaranteed to be valid
         # safely ignore the mypy warning here
@@ -358,16 +462,33 @@ class SSEClient(MCPClient):
         self.token: str | None = (
             server_info.token.resolve_value() if isinstance(server_info.token, Secret) else server_info.token
         )
+        # Resolve Secret values in headers dictionary
+        self.headers: dict[str, str] | None = _resolve_headers(server_info.headers)
         self.timeout: int = server_info.timeout
 
-    async def connect(self) -> list[Tool]:
+    async def connect(self) -> list[types.Tool]:
         """
         Connect to an MCP server using SSE transport.
+
+        Note: If both custom headers and token are provided, custom headers take precedence.
 
         :returns: List of available tools on the server
         :raises MCPConnectionError: If connection to the server fails
         """
-        headers = {"Authorization": f"Bearer {self.token}"} if self.token else None
+        if sse_client is None:
+            message = (
+                "SSE client is not available. "
+                "This may require a newer version of the mcp package that includes mcp.client.sse"
+            )
+            raise MCPConnectionError(message=message, operation="sse_connect")
+
+        # Use custom headers if provided, otherwise fall back to token-based Authorization
+        headers = None
+        if self.headers:
+            headers = self.headers
+        elif self.token:
+            headers = {"Authorization": f"Bearer {self.token}"}
+
         sse_transport = await self.exit_stack.enter_async_context(
             sse_client(self.url, headers=headers, timeout=self.timeout)
         )
@@ -379,23 +500,35 @@ class StreamableHttpClient(MCPClient):
     MCP client that connects to servers using streamable HTTP transport.
     """
 
-    def __init__(self, server_info: "StreamableHttpServerInfo") -> None:
+    def __init__(
+        self,
+        server_info: "StreamableHttpServerInfo",
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        max_delay: float = 30.0,
+    ) -> None:
         """
         Initialize a streamable HTTP MCP client using server configuration.
 
         :param server_info: Configuration object containing URL, token, timeout, etc.
+        :param max_retries: Maximum number of reconnection attempts
+        :param base_delay: Base delay for exponential backoff in seconds
         """
-        super().__init__()
+        super().__init__(max_retries=max_retries, base_delay=base_delay, max_delay=max_delay)
 
         self.url: str = server_info.url
         self.token: str | None = (
             server_info.token.resolve_value() if isinstance(server_info.token, Secret) else server_info.token
         )
+        # Resolve Secret values in headers dictionary
+        self.headers: dict[str, str] | None = _resolve_headers(server_info.headers)
         self.timeout: int = server_info.timeout
 
-    async def connect(self) -> list[Tool]:
+    async def connect(self) -> list[types.Tool]:
         """
         Connect to an MCP server using streamable HTTP transport.
+
+        Note: If both custom headers and token are provided, custom headers take precedence.
 
         :returns: List of available tools on the server
         :raises MCPConnectionError: If connection to the server fails
@@ -407,7 +540,13 @@ class StreamableHttpClient(MCPClient):
             )
             raise MCPConnectionError(message=message, operation="streamable_http_connect")
 
-        headers = {"Authorization": f"Bearer {self.token}"} if self.token else None
+        # Use custom headers if provided, otherwise fall back to token-based Authorization
+        headers = None
+        if self.headers:
+            headers = self.headers
+        elif self.token:
+            headers = {"Authorization": f"Bearer {self.token}"}
+
         streamablehttp_transport = await self.exit_stack.enter_async_context(
             streamablehttp_client(url=self.url, headers=headers, timeout=timedelta(seconds=self.timeout))
         )
@@ -438,7 +577,7 @@ class MCPServerInfo(ABC):
         :returns: Dictionary representation of this server info
         """
         # Store the fully qualified class name for deserialization
-        result = {"type": generate_qualified_class_name(type(self))}
+        result: dict[str, Any] = {"type": generate_qualified_class_name(type(self))}
 
         # Add all fields from the dataclass
         for dataclass_field in fields(self):
@@ -505,16 +644,40 @@ class SSEServerInfo(MCPServerInfo):
     )
     ```
 
+    For custom headers (e.g., non-standard authentication):
+
+    ```python
+    # Single custom header with Secret
+    server_info = SSEServerInfo(
+        url="https://my-mcp-server.com",
+        headers={"X-API-Key": Secret.from_env_var("API_KEY")},
+    )
+
+    # Multiple headers (mix of Secret and plain strings)
+    server_info = SSEServerInfo(
+        url="https://my-mcp-server.com",
+        headers={
+            "X-API-Key": Secret.from_env_var("API_KEY"),
+            "X-Client-ID": "my-client-id",
+        },
+    )
+    ```
+
     :param url: Full URL of the MCP server (including /sse endpoint)
     :param base_url: Base URL of the MCP server (deprecated, use url instead)
-    :param token: Authentication token for the server (optional)
+    :param token: Authentication token for the server (optional, generates "Authorization: Bearer `<token>`" header)
+    :param headers: Custom HTTP headers (optional, takes precedence over token parameter if provided)
     :param timeout: Connection timeout in seconds
     """
 
     url: str | None = None
     base_url: str | None = None  # deprecated
     token: str | Secret | None = None
+    headers: dict[str, str | Secret] | None = None
     timeout: int = 30
+    max_retries: int = 3
+    base_delay: float = 1.0
+    max_delay: float = 30.0
 
     def __post_init__(self):
         """Validate that either url or base_url is provided."""
@@ -538,7 +701,7 @@ class SSEServerInfo(MCPServerInfo):
             # from now on only use url for the lifetime of the SSEServerInfo instance, never base_url
             self.url = f"{self.base_url.rstrip('/')}/sse"
 
-        elif not is_valid_http_url(self.url):
+        elif self.url and not is_valid_http_url(self.url):
             message = f"Invalid url: {self.url}"
             raise ValueError(message)
 
@@ -549,7 +712,9 @@ class SSEServerInfo(MCPServerInfo):
         :returns: Configured MCPClient instance
         """
         # Pass the validated SSEServerInfo instance directly
-        return SSEClient(server_info=self)
+        return SSEClient(
+            server_info=self, max_retries=self.max_retries, base_delay=self.base_delay, max_delay=self.max_delay
+        )
 
 
 @dataclass
@@ -567,14 +732,38 @@ class StreamableHttpServerInfo(MCPServerInfo):
     )
     ```
 
+    For custom headers (e.g., non-standard authentication):
+
+    ```python
+    # Single custom header with Secret
+    server_info = StreamableHttpServerInfo(
+        url="https://my-mcp-server.com",
+        headers={"X-API-Key": Secret.from_env_var("API_KEY")},
+    )
+
+    # Multiple headers (mix of Secret and plain strings)
+    server_info = StreamableHttpServerInfo(
+        url="https://my-mcp-server.com",
+        headers={
+            "X-API-Key": Secret.from_env_var("API_KEY"),
+            "X-Client-ID": "my-client-id",
+        },
+    )
+    ```
+
     :param url: Full URL of the MCP server (streamable HTTP endpoint)
-    :param token: Authentication token for the server (optional)
+    :param token: Authentication token for the server (optional, generates "Authorization: Bearer `<token>`" header)
+    :param headers: Custom HTTP headers (optional, takes precedence over token parameter if provided)
     :param timeout: Connection timeout in seconds
     """
 
     url: str
     token: str | Secret | None = None
+    headers: dict[str, str | Secret] | None = None
     timeout: int = 30
+    max_retries: int = 3
+    base_delay: float = 1.0
+    max_delay: float = 30.0
 
     def __post_init__(self):
         """Validate the URL."""
@@ -588,7 +777,9 @@ class StreamableHttpServerInfo(MCPServerInfo):
 
         :returns: Configured StreamableHttpClient instance
         """
-        return StreamableHttpClient(server_info=self)
+        return StreamableHttpClient(
+            server_info=self, max_retries=self.max_retries, base_delay=self.base_delay, max_delay=self.max_delay
+        )
 
 
 @dataclass
@@ -622,6 +813,9 @@ class StdioServerInfo(MCPServerInfo):
     command: str
     args: list[str] | None = None
     env: dict[str, str | Secret] | None = None
+    max_retries: int = 3
+    base_delay: float = 1.0
+    max_delay: float = 30.0
 
     def create_client(self) -> MCPClient:
         """
@@ -629,7 +823,14 @@ class StdioServerInfo(MCPServerInfo):
 
         :returns: Configured StdioMCPClient instance
         """
-        return StdioClient(self.command, self.args, self.env)
+        return StdioClient(
+            self.command,
+            self.args,
+            self.env,
+            max_retries=self.max_retries,
+            base_delay=self.base_delay,
+            max_delay=self.max_delay,
+        )
 
 
 class MCPTool(Tool):
@@ -644,7 +845,23 @@ class MCPTool(Tool):
     - The JSON contains the structured response from the MCP server
     - Use json.loads() to parse the response into a dictionary
 
-    Example using HTTP:
+    Example using Streamable HTTP:
+    ```python
+    import json
+    from haystack_integrations.tools.mcp import MCPTool, StreamableHttpServerInfo
+
+    # Create tool instance
+    tool = MCPTool(
+        name="multiply",
+        server_info=StreamableHttpServerInfo(url="http://localhost:8000/mcp")
+    )
+
+    # Use the tool and parse result
+    result_json = tool.invoke(a=5, b=3)
+    result = json.loads(result_json)
+    ```
+
+    Example using SSE (deprecated):
     ```python
     import json
     from haystack.tools import MCPTool, SSEServerInfo
@@ -684,6 +901,7 @@ class MCPTool(Tool):
         description: str | None = None,
         connection_timeout: int = 30,
         invocation_timeout: int = 30,
+        eager_connect: bool = False,
     ):
         """
         Initialize the MCP tool.
@@ -693,6 +911,9 @@ class MCPTool(Tool):
         :param description: Custom description (if None, server description will be used)
         :param connection_timeout: Timeout in seconds for server connection
         :param invocation_timeout: Default timeout in seconds for tool invocations
+        :param eager_connect: If True, connect to server during initialization.
+                             If False (default), defer connection until warm_up or first tool use,
+                             whichever comes first.
         :raises MCPConnectionError: If connection to the server fails
         :raises MCPToolNotFoundError: If no tools are available or the requested tool is not found
         :raises TimeoutError: If connection times out
@@ -702,43 +923,31 @@ class MCPTool(Tool):
         self._server_info = server_info
         self._connection_timeout = connection_timeout
         self._invocation_timeout = invocation_timeout
+        self._eager_connect = eager_connect
+        self._client: MCPClient | None = None
+        self._worker: _MCPClientSessionManager | None = None
+        self._lock = threading.RLock()
+
+        # don't connect now; initialize permissively
+        if not eager_connect:
+            # Permissive placeholder JSON Schema so the Tool is valid
+            # without discovering the remote schema during validation.
+            # Tool parameters/schema will be replaced with the correct schema (from the MCP server) on first use.
+            params = {"type": "object", "properties": {}, "additionalProperties": True}
+            super().__init__(name=name, description=description or "", parameters=params, function=self._invoke_tool)
+            return
 
         logger.debug(f"TOOL: Initializing MCPTool '{name}'")
 
         try:
-            # Create client and spin up a long-lived worker that keeps the
-            # connect/close lifecycle inside one coroutine.
-            self._client = server_info.create_client()
-            logger.debug(f"TOOL: Created client for MCPTool '{name}'")
-
-            # The worker starts immediately and blocks here until the connection
-            # is established (or fails), returning the tool list.
-            self._worker = _MCPClientSessionManager(self._client, timeout=connection_timeout)
-
-            tools = self._worker.tools()
-            # Handle no tools case
-            if not tools:
-                logger.debug(f"TOOL: No tools found for '{name}'")
-                message = "No tools available on server"
-                raise MCPToolNotFoundError(message, tool_name=name)
-
-            # Find the specified tool
-            tool_dict = {t.name: t for t in tools}
-            logger.debug(f"TOOL: Available tools: {list(tool_dict.keys())}")
-
-            tool_info = tool_dict.get(name)
-
-            if not tool_info:
-                available = list(tool_dict.keys())
-                logger.debug(f"TOOL: Tool '{name}' not found in available tools")
-                message = f"Tool '{name}' not found on server. Available tools: {', '.join(available)}"
-                raise MCPToolNotFoundError(message, tool_name=name, available_tools=available)
-
+            logger.debug(f"TOOL: Connecting to MCP server for '{name}'")
+            tool_info = self._connect_and_initialize(name)
             logger.debug(f"TOOL: Found tool '{name}', initializing Tool parent class")
+
             # Initialize the parent class
             super().__init__(
                 name=name,
-                description=description or tool_info.description,
+                description=description or tool_info.description or "",
                 parameters=tool_info.inputSchema,
                 function=self._invoke_tool,
             )
@@ -767,6 +976,36 @@ class MCPTool(Tool):
             message = f"Failed to initialize MCPTool '{name}': {error_message}"
             raise MCPConnectionError(message=message, server_info=server_info, operation="initialize") from e
 
+    def _connect_and_initialize(self, tool_name: str) -> types.Tool:
+        """
+        Connect to the MCP server and retrieve the tool schema.
+
+        :param tool_name: Name of the tool to look for
+        :returns: The tool schema for this tool
+        :raises MCPToolNotFoundError: If the tool is not found on the server
+        """
+        client = self._server_info.create_client()
+        worker = _MCPClientSessionManager(client, timeout=self._connection_timeout)
+        tools = worker.tools()
+
+        # Handle no tools case
+        if not tools:
+            message = "No tools available on server"
+            raise MCPToolNotFoundError(message, tool_name=tool_name)
+
+        # Find the specified tool
+        tool = next((t for t in tools if t.name == tool_name), None)
+        if tool is None:
+            available = [t.name for t in tools]
+            msg = f"Tool '{tool_name}' not found on server. Available tools: {', '.join(available)}"
+            raise MCPToolNotFoundError(msg, tool_name=tool_name, available_tools=available)
+
+        # Publish connection
+        self._client = client
+        self._worker = worker
+
+        return tool
+
     def _invoke_tool(self, **kwargs: Any) -> str:
         """
         Synchronous tool invocation.
@@ -776,12 +1015,13 @@ class MCPTool(Tool):
         """
         logger.debug(f"TOOL: Invoking tool '{self.name}' with args: {kwargs}")
         try:
+            # Connect on first use if eager_connect is turned off
+            self.warm_up()
 
             async def invoke():
                 logger.debug(f"TOOL: Inside invoke coroutine for '{self.name}'")
-                result = await asyncio.wait_for(
-                    self._client.call_tool(self.name, kwargs), timeout=self._invocation_timeout
-                )
+                client = cast(MCPClient, self._client)
+                result = await asyncio.wait_for(client.call_tool(self.name, kwargs), timeout=self._invocation_timeout)
                 logger.debug(f"TOOL: Invoke successful for '{self.name}'")
                 return result
 
@@ -809,7 +1049,9 @@ class MCPTool(Tool):
         :raises TimeoutError: If the operation times out
         """
         try:
-            return await asyncio.wait_for(self._client.call_tool(self.name, kwargs), timeout=self._invocation_timeout)
+            self.warm_up()
+            client = cast(MCPClient, self._client)
+            return await asyncio.wait_for(client.call_tool(self.name, kwargs), timeout=self._invocation_timeout)
         except asyncio.TimeoutError as e:
             message = f"Tool invocation timed out after {self._invocation_timeout} seconds"
             raise TimeoutError(message) from e
@@ -818,6 +1060,14 @@ class MCPTool(Tool):
                 raise
             message = f"Failed to invoke tool '{self.name}' with args: {kwargs} , got error: {e!s}"
             raise MCPInvocationError(message, self.name, kwargs) from e
+
+    def warm_up(self) -> None:
+        """Connect and fetch the tool schema if eager_connect is turned off."""
+        with self._lock:
+            if self._client is not None:
+                return
+            tool = self._connect_and_initialize(self.name)
+            self.parameters = tool.inputSchema
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -828,7 +1078,7 @@ class MCPTool(Tool):
         active connection is not maintained.
 
         :returns: Dictionary with serialized data in the format:
-                  {"type": fully_qualified_class_name, "data": {parameters}}
+                  `{"type": fully_qualified_class_name, "data": {parameters}}`
         """
         serialized = {
             "name": self.name,
@@ -836,6 +1086,7 @@ class MCPTool(Tool):
             "server_info": self._server_info.to_dict(),
             "connection_timeout": self._connection_timeout,
             "invocation_timeout": self._invocation_timeout,
+            "eager_connect": self._eager_connect,
         }
         return {
             "type": generate_qualified_class_name(type(self)),
@@ -863,11 +1114,12 @@ class MCPTool(Tool):
         # First get the appropriate class by name
         server_info_class = import_class_by_name(server_info_dict["type"])
         # Then deserialize using that class's from_dict method
-        server_info = server_info_class.from_dict(server_info_dict)
+        server_info = cast(MCPServerInfo, server_info_class).from_dict(server_info_dict)
 
         # Handle backward compatibility for timeout parameters
         connection_timeout = inner_data.get("connection_timeout", 30)
         invocation_timeout = inner_data.get("invocation_timeout", 30)
+        eager_connect = inner_data.get("eager_connect", False)  # because False is the default
 
         # Create a new MCPTool instance with the deserialized parameters
         # This will establish a new connection to the MCP server
@@ -877,6 +1129,7 @@ class MCPTool(Tool):
             server_info=server_info,
             connection_timeout=connection_timeout,
             invocation_timeout=invocation_timeout,
+            eager_connect=eager_connect,
         )
 
     def close(self):
@@ -919,7 +1172,7 @@ class _MCPClientSessionManager:
         self.executor = AsyncExecutor.get_instance()
 
         # Where the tool list (or an exception) will be delivered.
-        self._tools_promise: Future[list[Tool]] = Future()
+        self._tools_promise: Future[list[types.Tool]] = Future()
 
         # Kick off the worker coroutine in the background loop
         self._worker_future, self._stop_event = self.executor.run_background(self._run, timeout=None)
@@ -932,7 +1185,7 @@ class _MCPClientSessionManager:
             self.stop()
             raise
 
-    def tools(self) -> list[Tool]:
+    def tools(self) -> list[types.Tool]:
         """Return the tool list already collected during startup."""
 
         return self._tools_promise.result()
@@ -940,7 +1193,7 @@ class _MCPClientSessionManager:
     def stop(self) -> None:
         """Request the worker to shut down and block until done."""
 
-        def _set(ev: asyncio.Event):
+        def _set(ev: asyncio.Event) -> None:
             if not ev.is_set():
                 ev.set()
 
@@ -959,7 +1212,7 @@ class _MCPClientSessionManager:
             logger.debug(f"Error during worker future result: {e}")
             pass
 
-    async def _run(self, stop_event: asyncio.Event):
+    async def _run(self, stop_event: asyncio.Event) -> None:
         """Background coroutine living in AsyncExecutor's loop."""
 
         try:

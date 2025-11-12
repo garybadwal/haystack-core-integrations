@@ -1,12 +1,18 @@
 import os
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Optional
 
 from haystack import component, default_from_dict, default_to_dict, logging
 from haystack.dataclasses import StreamingChunk
-from haystack.tools import Tool, _check_duplicate_tool_names, deserialize_tools_or_toolset_inplace
+from haystack.tools import (
+    ToolsType,
+    _check_duplicate_tool_names,
+    deserialize_tools_or_toolset_inplace,
+    flatten_tools_or_toolsets,
+    serialize_tools_or_toolset,
+)
 from haystack.utils import deserialize_callable, serialize_callable
 
-from anthropic import AnthropicVertex
+from anthropic import AnthropicVertex, AsyncAnthropicVertex
 
 from .chat_generator import AnthropicChatGenerator
 
@@ -39,7 +45,7 @@ class AnthropicVertexChatGenerator(AnthropicChatGenerator):
 
     messages = [ChatMessage.from_user("What's Natural Language Processing?")]
     client = AnthropicVertexChatGenerator(
-                model="claude-3-sonnet@20240229",
+                model="claude-sonnet-4@20250514",
                 project_id="your-project-id", region="your-region"
             )
     response = client.run(messages)
@@ -50,7 +56,7 @@ class AnthropicVertexChatGenerator(AnthropicChatGenerator):
     >> focuses on enabling computers to understand, interpret, and generate human language. It involves developing
     >> techniques and algorithms to analyze and process text or speech data, allowing machines to comprehend and
     >> communicate in natural languages like English, Spanish, or Chinese.")],
-    >> _name=None, _meta={'model': 'claude-3-sonnet@20240229', 'index': 0, 'finish_reason': 'end_turn',
+    >> _name=None, _meta={'model': 'claude-sonnet-4@20250514', 'index': 0, 'finish_reason': 'end_turn',
     >> 'usage': {'input_tokens': 15, 'output_tokens': 64}})]}
     ```
 
@@ -63,11 +69,14 @@ class AnthropicVertexChatGenerator(AnthropicChatGenerator):
         self,
         region: str,
         project_id: str,
-        model: str = "claude-3-5-sonnet@20240620",
+        model: str = "claude-sonnet-4@20250514",
         streaming_callback: Optional[Callable[[StreamingChunk], None]] = None,
-        generation_kwargs: Optional[Dict[str, Any]] = None,
+        generation_kwargs: Optional[dict[str, Any]] = None,
         ignore_tools_thinking_messages: bool = True,
-        tools: Optional[List[Tool]] = None,
+        tools: Optional[ToolsType] = None,
+        *,
+        timeout: Optional[float] = None,
+        max_retries: Optional[int] = None,
     ):
         """
         Creates an instance of AnthropicVertexChatGenerator.
@@ -95,9 +104,15 @@ class AnthropicVertexChatGenerator(AnthropicChatGenerator):
             `ignore_tools_thinking_messages` is `True`, the generator will drop so-called thinking messages when tool
             use is detected. See the Anthropic [tools](https://docs.anthropic.com/en/docs/tool-use#chain-of-thought-tool-use)
             for more details.
-        :param tools: A list of Tool objects that the model can use. Each tool should have a unique name.
+        :param tools: A list of Tool and/or Toolset objects, or a single Toolset, that the model can use.
+            Each tool should have a unique name.
+        :param timeout:
+            Timeout for Anthropic client calls. If not set, it defaults to the default set by the Anthropic client.
+        :param max_retries:
+            Maximum number of retries to attempt for failed requests. If not set, it defaults to the default set by
+            the Anthropic client.
         """
-        _check_duplicate_tool_names(tools)
+        _check_duplicate_tool_names(flatten_tools_or_toolsets(tools))
         self.region = region or os.environ.get("REGION")
         self.project_id = project_id or os.environ.get("PROJECT_ID")
         self.model = model
@@ -105,11 +120,22 @@ class AnthropicVertexChatGenerator(AnthropicChatGenerator):
         self.streaming_callback = streaming_callback
         self.ignore_tools_thinking_messages = ignore_tools_thinking_messages
         self.tools = tools
+        self.timeout = timeout
+        self.max_retries = max_retries
 
-        # mypy is not happy that we override the type of the client
-        self.client = AnthropicVertex(region=self.region, project_id=self.project_id)  # type: ignore
+        client_kwargs: dict[str, Any] = {"region": self.region, "project_id": self.project_id}
+        # We do this since timeout=None is not the same as not setting it in Anthropic
+        if timeout is not None:
+            client_kwargs["timeout"] = timeout
+        # We do this since max_retries must be an int when passing to Anthropic
+        if max_retries is not None:
+            client_kwargs["max_retries"] = max_retries
 
-    def to_dict(self) -> Dict[str, Any]:
+        # mypy is not happy that we override the type of the clients
+        self.client = AnthropicVertex(**client_kwargs)  # type: ignore[assignment]
+        self.async_client = AsyncAnthropicVertex(**client_kwargs)  # type: ignore[assignment]
+
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize this component to a dictionary.
 
@@ -117,7 +143,6 @@ class AnthropicVertexChatGenerator(AnthropicChatGenerator):
             The serialized component as a dictionary.
         """
         callback_name = serialize_callable(self.streaming_callback) if self.streaming_callback else None
-        serialized_tools = [tool.to_dict() for tool in self.tools] if self.tools else None
 
         return default_to_dict(
             self,
@@ -127,11 +152,13 @@ class AnthropicVertexChatGenerator(AnthropicChatGenerator):
             streaming_callback=callback_name,
             generation_kwargs=self.generation_kwargs,
             ignore_tools_thinking_messages=self.ignore_tools_thinking_messages,
-            tools=serialized_tools,
+            tools=serialize_tools_or_toolset(self.tools),
+            timeout=self.timeout,
+            max_retries=self.max_retries,
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AnthropicVertexChatGenerator":
+    def from_dict(cls, data: dict[str, Any]) -> "AnthropicVertexChatGenerator":
         """
         Deserialize this component from a dictionary.
 

@@ -534,6 +534,7 @@ class PgvectorDocumentStore:
         The name of the schema (`schema_name`) and the name of the table (`table_name`)
         are defined when initializing the `PgvectorDocumentStore`.
         """
+        self._ensure_db_setup()
         delete_sql = SQL("DROP TABLE IF EXISTS {schema_name}.{table_name}").format(
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
@@ -551,6 +552,7 @@ class PgvectorDocumentStore:
         """
         Async method to delete the table used to store Haystack documents.
         """
+        await self._ensure_db_setup_async()
         delete_sql = SQL("DROP TABLE IF EXISTS {schema_name}.{table_name}").format(
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
@@ -983,6 +985,38 @@ class PgvectorDocumentStore:
             cursor=self._async_cursor,
             sql_query=delete_sql,
             error_msg="Could not delete documents from PgvectorDocumentStore",
+        )
+
+    def delete_all_documents(self) -> None:
+        """
+        Deletes all documents in the document store.
+        """
+        query = SQL("TRUNCATE TABLE {schema_name}.{table_name}").format(
+            schema_name=Identifier(self.schema_name),
+            table_name=Identifier(self.table_name),
+        )
+
+        self._ensure_db_setup()
+        assert self._cursor is not None
+        self._execute_sql(
+            cursor=self._cursor, sql_query=query, error_msg="Could not delete all documents from PgvectorDocumentStore"
+        )
+
+    async def delete_all_documents_async(self) -> None:
+        """
+        Asynchronously deletes all documents in the document store.
+        """
+        query = SQL("TRUNCATE TABLE {schema_name}.{table_name}").format(
+            schema_name=Identifier(self.schema_name),
+            table_name=Identifier(self.table_name),
+        )
+
+        await self._ensure_db_setup_async()
+        assert self._async_cursor is not None
+        await self._execute_sql_async(
+            cursor=self._async_cursor,
+            sql_query=query,
+            error_msg="Could not delete all documents from PgvectorDocumentStore",
         )
 
     def _build_keyword_retrieval_query(

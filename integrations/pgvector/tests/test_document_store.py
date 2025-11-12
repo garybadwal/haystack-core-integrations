@@ -53,6 +53,13 @@ class TestDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDocumentsT
             same_connection = document_store._connection
             assert same_connection is document_store._connection
 
+    def test_delete_all_documents(self, document_store: PgvectorDocumentStore) -> None:
+        document_store.write_documents([Document(id=str(i)) for i in range(10)])
+        document_store.delete_all_documents()
+        assert document_store.count_documents() == 0
+        document_store.write_documents([Document(id="1")])
+        assert document_store.count_documents() == 1
+
 
 @pytest.mark.usefixtures("patches_for_unit_tests")
 def test_init(monkeypatch):
@@ -237,3 +244,12 @@ def test_create_table_if_not_exists():
     # Clean up: drop the schema after the test
     with psycopg.connect(connection_string, autocommit=True) as conn:
         conn.execute(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE")
+
+
+@pytest.mark.integration
+def test_delete_table_first_call(document_store):
+    """
+    Test that delete_table can be executed as the initial operation on the Document Store
+    without triggering errors due to an uninitialized state.
+    """
+    document_store.delete_table()  # if throw error, test fails

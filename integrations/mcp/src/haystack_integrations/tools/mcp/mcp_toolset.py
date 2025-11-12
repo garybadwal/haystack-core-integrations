@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -13,6 +14,7 @@ from haystack.tools import Tool, Toolset
 
 from .mcp_tool import (
     AsyncExecutor,
+    MCPClient,
     MCPConnectionError,
     MCPServerInfo,
     MCPToolNotFoundError,
@@ -31,7 +33,8 @@ class MCPToolset(Toolset):
     access to its tools.
 
     MCPToolset dynamically discovers and loads all tools from any MCP-compliant server,
-    supporting both network-based SSE connections and local process-based stdio connections.
+    supporting both network-based streaming connections (Streamable HTTP, SSE) and local
+    process-based stdio connections.
     This dual connectivity allows for integrating with both remote and local MCP servers.
 
     Example using MCPToolset in a Haystack Pipeline:
@@ -84,7 +87,19 @@ class MCPToolset(Toolset):
     print(result["response_llm"]["replies"][0].text)
     ```
 
-    You can also use the toolset via MCP SSE to talk to remote servers:
+    You can also use the toolset via Streamable HTTP to talk to remote servers:
+    ```python
+    from haystack_integrations.tools.mcp import MCPToolset, StreamableHttpServerInfo
+
+    # Create the toolset with streamable HTTP connection
+    toolset = MCPToolset(
+        server_info=StreamableHttpServerInfo(url="http://localhost:8000/mcp"),
+        tool_names=["multiply"]  # Optional: only include specific tools
+    )
+    # Use the toolset as shown in the pipeline example above
+    ```
+
+    Example using SSE (deprecated):
     ```python
     from haystack_integrations.tools.mcp import MCPToolset, SSEServerInfo
     from haystack.components.tools import ToolInvoker
@@ -105,6 +120,7 @@ class MCPToolset(Toolset):
         tool_names: list[str] | None = None,
         connection_timeout: float = 30.0,
         invocation_timeout: float = 30.0,
+        eager_connect: bool = False,
     ):
         """
         Initialize the MCP toolset.
@@ -114,6 +130,8 @@ class MCPToolset(Toolset):
                           matching names will be added to the toolset.
         :param connection_timeout: Timeout in seconds for server connection
         :param invocation_timeout: Default timeout in seconds for tool invocations
+        :param eager_connect: If True, connect to server and load tools during initialization.
+                             If False (default), defer connection to warm_up.
         :raises MCPToolNotFoundError: If any of the specified tool names are not found on the server
         """
         # Store configuration
@@ -121,8 +139,39 @@ class MCPToolset(Toolset):
         self.tool_names = tool_names
         self.connection_timeout = connection_timeout
         self.invocation_timeout = invocation_timeout
+        self.eager_connect = eager_connect
+        self._warmup_called = False
 
-        # Connect and load tools
+        if not eager_connect:
+            # Do not connect during validation; expose a toolset with one fake tool to pass validation
+            placeholder_tool = Tool(
+                name=f"mcp_not_connected_placeholder_{id(self)}",
+                description="Placeholder tool initialised when eager_connect is turned off",
+                parameters={"type": "object", "properties": {}, "additionalProperties": True},
+                function=lambda: None,
+            )
+            super().__init__(tools=[placeholder_tool])
+        else:
+            tools = self._connect_and_load_tools()
+            super().__init__(tools=tools)
+            self._warmup_called = True
+
+    def warm_up(self) -> None:
+        """Connect and load tools when eager_connect is turned off.
+
+        This method is automatically called by ``ToolInvoker.warm_up()`` and ``Pipeline.warm_up()``.
+        You can also call it directly before using the toolset to ensure all tool schemas
+        are available without performing a real invocation.
+        """
+        if self._warmup_called:
+            return
+
+        # connect and load tools never adds duplicate tools, set the tools attribute directly
+        self.tools = self._connect_and_load_tools()
+        self._warmup_called = True
+
+    def _connect_and_load_tools(self) -> list[Tool]:
+        """Connect and load tools."""
         try:
             # Create the client and spin up a worker so open/close happen in the
             # same coroutine, avoiding AnyIO cancel-scope issues.
@@ -145,13 +194,19 @@ class MCPToolset(Toolset):
                     )
 
             # This is a factory that creates the invocation function for the Tool
-            def create_invoke_tool(mcp_client, tool_name, tool_timeout):
-                def invoke_tool(**kwargs) -> Any:
-                    """Invoke a tool using the existing client and AsyncExecutor."""
-                    result = AsyncExecutor.get_instance().run(
+            def create_invoke_tool(
+                owner_toolset: "MCPToolset",
+                mcp_client: MCPClient,
+                tool_name: str,
+                tool_timeout: float,
+            ) -> Callable[..., Any]:
+                """Return a closure that keeps a strong reference to *owner_toolset* alive."""
+
+                def invoke_tool(**kwargs: Any) -> Any:
+                    _ = owner_toolset  # strong reference so GC can't collect the toolset too early
+                    return AsyncExecutor.get_instance().run(
                         mcp_client.call_tool(tool_name, kwargs), timeout=tool_timeout
                     )
-                    return result
 
                 return invoke_tool
 
@@ -168,19 +223,20 @@ class MCPToolset(Toolset):
                 # Use the helper function to create the invoke_tool function
                 tool = Tool(
                     name=tool_info.name,
-                    description=tool_info.description,
+                    description=tool_info.description or "",
                     parameters=tool_info.inputSchema,
-                    function=create_invoke_tool(client, tool_info.name, self.invocation_timeout),
+                    function=create_invoke_tool(self, client, tool_info.name, self.invocation_timeout),
                 )
                 haystack_tools.append(tool)
 
-            # Initialize parent class with complete tools list
-            super().__init__(tools=haystack_tools)
-
+            return haystack_tools
         except Exception as e:
             # We need to close because we could connect properly, retrieve tools yet
             # fail because of an MCPToolNotFoundError
             self.close()
+
+            if isinstance(e, MCPToolNotFoundError):
+                raise  # re-raise MCPToolNotFoundError as is to show original message
 
             # Create informative error message for SSE connection errors
             # Common error handling for HTTP-based transports
@@ -249,6 +305,7 @@ class MCPToolset(Toolset):
                 "tool_names": self.tool_names,
                 "connection_timeout": self.connection_timeout,
                 "invocation_timeout": self.invocation_timeout,
+                "eager_connect": self.eager_connect,
             },
         }
 
@@ -265,7 +322,7 @@ class MCPToolset(Toolset):
         # Reconstruct the server_info object
         server_info_dict = inner_data.get("server_info", {})
         server_info_class = import_class_by_name(server_info_dict["type"])
-        server_info = server_info_class.from_dict(server_info_dict)
+        server_info = cast(MCPServerInfo, server_info_class).from_dict(server_info_dict)
 
         # Create a new MCPToolset instance
         return cls(
@@ -273,6 +330,7 @@ class MCPToolset(Toolset):
             tool_names=inner_data.get("tool_names"),
             connection_timeout=inner_data.get("connection_timeout", 30.0),
             invocation_timeout=inner_data.get("invocation_timeout", 30.0),
+            eager_connect=inner_data.get("eager_connect", True),
         )
 
     def close(self):

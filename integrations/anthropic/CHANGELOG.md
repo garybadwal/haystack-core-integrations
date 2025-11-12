@@ -1,5 +1,99 @@
 # Changelog
 
+## [integrations/anthropic-v4.5.1]
+
+### 🧹 Chores
+
+- Adopt PEP 585 type hinting
+
+
+## [integrations/anthropic-v4.5.0] - 2025-10-22
+
+### 🚀 Features
+
+- `AnthropicChatGenerator` update tools param to ToolsType  (#2417)
+
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+
+## [integrations/anthropic-v4.4.0] - 2025-09-15
+
+### 🚀 Features
+
+- `AnthropicChatGenerator`- refine reasoning support (#2230)
+
+
+### 🧹 Chores
+
+- Standardize readmes - part 1 (#2202)
+- Standardize readmes - part 2 (#2205)
+- Fix linting in Anthropic (#2251)
+
+## [integrations/anthropic-v4.3.0] - 2025-08-18
+
+### 🚀 Features
+
+- Add multimodal support to AnthropicChatGenerator (#2186)
+
+
+## [integrations/anthropic-v4.2.1] - 2025-08-11
+
+### 🐛 Bug Fixes
+
+- Add `input_tokens` in usage of Anthropic messages (#2173)
+
+
+## [integrations/anthropic-v4.2.0] - 2025-08-07
+
+### 🐛 Bug Fixes
+
+- Error in `ToolCallDelta.index` for parallel tool calling (#2154)
+
+
+## [integrations/anthropic-v4.1.0] - 2025-08-05
+
+### 🚀 Features
+
+- Adopt new `StreamingChunk` in Anthropic (#2096)
+
+### 🌀 Miscellaneous
+
+- Fix/prompt caching support (#2051)
+
+## [integrations/anthropic-v3.1.0] - 2025-07-04
+
+### 🚀 Features
+
+- Pass `component_info`to `StreamingChunk` in `AnthropicChatGenerator` (#2056)
+
+
+## [integrations/anthropic-v3.0.0] - 2025-06-30
+
+### 🚀 Features
+
+- [**breaking**] Anthopic model update to `claude-sonnet-4-20250514` (#2022)
+
+### 🐛 Bug Fixes
+
+- Anthropic reports input tokens in first message delta (#2001)
+
+### 🧹 Chores
+
+- Improve typing for select_streaming_callback (#2008)
+
+
+## [integrations/anthropic-v2.7.0] - 2025-06-25
+
+### 🚀 Features
+
+- Add `timeout`, `max_retries` to all generators and async support to `AnthropicVertexChatGenerator` (#1952)
+
+### 🧹 Chores
+
+- Remove black (#1985)
+
+
 ## [integrations/anthropic-v2.6.1] - 2025-06-16
 
 ### 🌀 Miscellaneous

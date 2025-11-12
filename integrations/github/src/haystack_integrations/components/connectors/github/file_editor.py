@@ -115,7 +115,9 @@ class GitHubFileEditor:
         """
         headers = self.base_headers.copy()
         if self.github_token is not None:
-            headers["Authorization"] = f"Bearer {self.github_token.resolve_value()}"
+            token_value = self.github_token.resolve_value()
+            if token_value:
+                headers["Authorization"] = f"Bearer {token_value}"
         return headers
 
     def _get_file_content(self, owner: str, repo: str, path: str, branch: str) -> tuple[str, str]:
@@ -225,7 +227,7 @@ class GitHubFileEditor:
     def _delete_file(self, owner: str, repo: str, payload: Dict[str, str], branch: str) -> str:
         """Handle file deletion."""
         try:
-            content, sha = self._get_file_content(owner, repo, payload["path"], branch)
+            _, sha = self._get_file_content(owner, repo, payload["path"], branch)
             url = f"https://api.github.com/repos/{owner}/{repo}/contents/{payload['path']}"
 
             data = {"message": payload["message"], "sha": sha, "branch": branch}

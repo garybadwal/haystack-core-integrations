@@ -1,5 +1,93 @@
 # Changelog
 
+## [integrations/google_genai-v2.2.0] - 2025-10-22
+
+### 🚀 Features
+
+- `GoogleGenAIChatGenerator` update tools param to ToolsType (#2419)
+
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+- Fix docstrings to avoid errors in API reference generation (#2423)
+
+### 🧪 Testing
+
+- Replace deprecated `gemini-1.5` model with `gemini-2.0-flash` in Google GenAI test (#2323)
+
+### ⚙️ CI
+
+- Install dependencies in the `test` environment when testing with lowest direct dependencies and Haystack main (#2418)
+
+### 🧹 Chores
+
+- *(deps)* Bump actions/setup-python from 5 to 6 (#2241)
+
+
+## [integrations/google_genai-v2.1.2] - 2025-08-28
+
+### 🚀 Features
+
+- Add Gemini "Thinking" support to GoogleGenAIChatGenerator (#2212)
+
+### 🧹 Chores
+
+- Standardize readmes - part 2 (#2205)
+
+
+## [integrations/google_genai-v2.1.1] - 2025-08-07
+
+### 🐛 Bug Fixes
+
+- Add optional `aiohttp` to google-genai integration (#2160)
+
+
+## [integrations/google_genai-v2.1.0] - 2025-08-06
+
+### 🚀 Features
+
+- Image support in GoogleGenAIChatGenerator (#2150)
+
+
+## [integrations/google_genai-v2.0.0] - 2025-08-04
+
+### 🚀 Features
+
+- Adopt new `StreamingChunk` in Google GenAI (#2078)
+
+### 🌀 Miscellaneous
+
+- Fix!: `GoogleGenAIChatGenerator` - align `finish_reason` between streaming and non-streaming (#2142)
+
+## [integrations/google_genai-v1.3.0] - 2025-07-07
+
+### 🚀 Features
+
+- Google GenAI - add support for Vertex API (#2058)
+
+
+## [integrations/google_genai-v1.2.0] - 2025-06-27
+
+### 🐛 Bug Fixes
+
+- Fix Google GenAI types + add py.typed (#2005)
+
+### 🧹 Chores
+
+- Remove black (#1985)
+
+
+## [integrations/google_genai-v1.1.0] - 2025-06-24
+
+### 🚀 Features
+
+- Add asynchronous embedding methods for GoogleGenAIDocumentEmbedder and GoogleGenAITextEmbedder (#1983)
+
+### 🧹 Chores
+
+- Fix linting for ruff 0.12.0 (#1969)
+
+
 ## [integrations/google_genai-v1.0.2] - 2025-06-12
 
 ### 🚀 Features

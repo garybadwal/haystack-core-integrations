@@ -60,9 +60,9 @@ class GitHubRepoForker:
         :param auto_sync: If True, syncs fork with original repository if it already exists
         :param create_branch: If True, creates a fix branch based on the issue number
         """
-        error_message = "github_token must be a Secret"
         if not isinstance(github_token, Secret):
-            raise TypeError(error_message)
+            msg = "github_token must be a Secret"
+            raise TypeError(msg)
 
         self.github_token = github_token
         self.raise_on_failure = raise_on_failure
@@ -85,7 +85,9 @@ class GitHubRepoForker:
         """
         headers = self.base_headers.copy()
         if self.github_token is not None:
-            headers["Authorization"] = f"Bearer {self.github_token.resolve_value()}"
+            token_value = self.github_token.resolve_value()
+            if token_value:
+                headers["Authorization"] = f"Bearer {token_value}"
         return headers
 
     def _parse_github_url(self, url: str) -> tuple[str, str, str]:

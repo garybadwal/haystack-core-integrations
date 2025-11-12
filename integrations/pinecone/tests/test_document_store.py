@@ -158,13 +158,13 @@ def test_discard_invalid_meta_invalid():
             ],
         },
     )
-    pinecone_doc = PineconeDocumentStore._discard_invalid_meta(invalid_metadata_doc)
+    PineconeDocumentStore._discard_invalid_meta(invalid_metadata_doc)
 
-    assert pinecone_doc.meta["source_id"] == "62049ba1d1e1d5ebb1f6230b0b00c5356b8706c56e0b9c36b1dfc86084cd75f0"
-    assert pinecone_doc.meta["page_number"] == 1
-    assert pinecone_doc.meta["split_id"] == 0
-    assert pinecone_doc.meta["split_idx_start"] == 0
-    assert "_split_overlap" not in pinecone_doc.meta
+    assert invalid_metadata_doc.meta["source_id"] == "62049ba1d1e1d5ebb1f6230b0b00c5356b8706c56e0b9c36b1dfc86084cd75f0"
+    assert invalid_metadata_doc.meta["page_number"] == 1
+    assert invalid_metadata_doc.meta["split_id"] == 0
+    assert invalid_metadata_doc.meta["split_idx_start"] == 0
+    assert "_split_overlap" not in invalid_metadata_doc.meta
 
 
 def test_discard_invalid_meta_valid():
@@ -175,10 +175,10 @@ def test_discard_invalid_meta_valid():
             "page_number": 1,
         },
     )
-    pinecone_doc = PineconeDocumentStore._discard_invalid_meta(valid_metadata_doc)
+    PineconeDocumentStore._discard_invalid_meta(valid_metadata_doc)
 
-    assert pinecone_doc.meta["source_id"] == "62049ba1d1e1d5ebb1f6230b0b00c5356b8706c56e0b9c36b1dfc86084cd75f0"
-    assert pinecone_doc.meta["page_number"] == 1
+    assert valid_metadata_doc.meta["source_id"] == "62049ba1d1e1d5ebb1f6230b0b00c5356b8706c56e0b9c36b1dfc86084cd75f0"
+    assert valid_metadata_doc.meta["page_number"] == 1
 
 
 def test_convert_meta_to_int():
@@ -272,11 +272,24 @@ class TestDocumentStore(CountDocumentsTest, DeleteDocumentsTest, WriteDocumentsT
     @pytest.mark.skip(reason="Pinecone creates a namespace only when the first document is written")
     def test_delete_documents_empty_document_store(self, document_store: PineconeDocumentStore): ...
 
+    def test_delete_all_documents(self, document_store: PineconeDocumentStore):
+        docs = [Document(content="first doc"), Document(content="second doc")]
+        document_store.write_documents(docs)
+        assert document_store.count_documents() == 2
+
+        document_store.delete_all_documents()
+        assert document_store.count_documents() == 0
+
+    def test_delete_all_documents_empty_collection(self, document_store: PineconeDocumentStore):
+        assert document_store.count_documents() == 0
+        document_store.delete_all_documents()
+        assert document_store.count_documents() == 0
+
     def test_embedding_retrieval(self, document_store: PineconeDocumentStore):
         query_embedding = [0.1] * 768
         most_similar_embedding = [0.8] * 768
         second_best_embedding = [0.8] * 700 + [0.1] * 3 + [0.2] * 65
-        another_embedding = np.random.rand(768).tolist()
+        another_embedding = [0.1] * 384 + [-0.1] * 384
 
         docs = [
             Document(content="Most similar document", embedding=most_similar_embedding),
@@ -287,9 +300,23 @@ class TestDocumentStore(CountDocumentsTest, DeleteDocumentsTest, WriteDocumentsT
         document_store.write_documents(docs)
 
         results = document_store._embedding_retrieval(query_embedding=query_embedding, top_k=2, filters={})
+
         assert len(results) == 2
-        assert results[0].content == "Most similar document"
-        assert results[1].content == "2nd best document"
+        # Pinecone does not seem to guarantee the order of the results
+        assert "Most similar document" in [result.content for result in results]
+        assert "2nd best document" in [result.content for result in results]
+
+    def test_close(self, document_store: PineconeDocumentStore):
+        document_store._initialize_index()
+        assert document_store._index is not None
+
+        document_store.close()
+        assert document_store._index is None
+
+        document_store._initialize_index()
+        assert document_store._index is not None
+        # test that the index is still usable after closing and reopening
+        assert document_store.count_documents() == 0
 
     def test_sentence_window_retriever(self, document_store: PineconeDocumentStore):
         # indexing

@@ -1,5 +1,45 @@
 # Changelog
 
+## [integrations/llama_cpp-v1.4.0] - 2025-10-23
+
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+
+### ⚙️ CI
+
+- Download pre-built wheels for llama-cpp-python on macOS (#2235)
+
+### 🧹 Chores
+
+- Fix llama.cpp types (#2271)
+
+### 🌀 Miscellaneous
+
+- Feat: `LlamaCppChatGenerator` update tools param to ToolsType (#2438)
+
+## [integrations/llama_cpp-v1.3.0] - 2025-08-22
+
+### 🚀 Features
+
+- Add image support to LlamaCppChatGenerator (#2197)
+
+### 🧹 Chores
+
+- Standardize readmes - part 2 (#2205)
+
+
+## [integrations/llama_cpp-v1.2.0] - 2025-07-28
+
+### 🚀 Features
+
+- `LlamaCppChatGenerator` streaming support (#2108)
+
+### 🧹 Chores
+
+- Remove black (#1985)
+
+
 ## [integrations/llama_cpp-v1.1.0] - 2025-06-19
 
 ### 🐛 Bug Fixes

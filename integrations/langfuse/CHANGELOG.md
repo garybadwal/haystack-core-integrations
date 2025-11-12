@@ -1,6 +1,82 @@
 # Changelog
 
-## [unreleased]
+## [integrations/langfuse-v3.2.1] - 2025-11-07
+
+### 🌀 Miscellaneous
+
+- Chore: Upgrade langfuse dep, observation types require version>=3.3.1 (#2493)
+
+## [integrations/langfuse-v3.2.0] - 2025-11-07
+
+### 🐛 Bug Fixes
+
+- Flatten usage_details dict (#2491)
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🌀 Miscellaneous
+
+- Usage_details instead usage (#2481)
+- Feat: Langfuse - add support for tool and agent observation types (#2490)
+
+## [integrations/langfuse-v3.1.0] - 2025-10-24
+
+### 🐛 Bug Fixes
+
+- Langfuse - add py.typed; fix testing with lowest deps (#2458)
+
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+
+### ⚙️ CI
+
+- Install dependencies in the `test` environment when testing with lowest direct dependencies and Haystack main (#2418)
+
+### 🧹 Chores
+
+- Remove ruff exclude and fix linting in Langfuse integration (#2257)
+
+
+## [integrations/langfuse-v3.0.0] - 2025-09-19
+
+### 🌀 Miscellaneous
+
+- Migrate langfuse to v3 (#2247)
+
+## [integrations/langfuse-v2.3.0] - 2025-08-25
+
+### 🐛 Bug Fixes
+
+- Avoid mixed Langfuse traces in async envs (#2207)
+
+### 🧪 Testing
+
+- Make tests successfully run from forks (#2203)
+
+### 🧹 Chores
+
+- Standardize readmes - part 2 (#2205)
+
+
+## [integrations/langfuse-v2.2.1] - 2025-08-07
+
+### 🚀 Features
+
+- Add AmazonBedrockChatGenerator to supported chat generators in Langfuse (#2164)
+
+
+## [integrations/langfuse-v2.2.0] - 2025-07-03
+
+### 🚀 Features
+
+- Simpler generation spans, use Haystack's to_openai_dict_format (#2044)
+
+### 🐛 Bug Fixes
+
+- Properly cleanup Langfuse tracing context after pipeline run failures (#1999)
 
 
 ### 🧹 Chores
@@ -8,6 +84,8 @@
 - Pin langfuse<3.0.0 (#1904)
 - Align core-integrations Hatch scripts (#1898)
 - Update md files for new hatch scripts (#1911)
+- Remove black (#1985)
+
 
 ## [integrations/langfuse-v2.0.1] - 2025-06-02
 

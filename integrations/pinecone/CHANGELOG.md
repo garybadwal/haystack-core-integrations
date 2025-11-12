@@ -1,5 +1,56 @@
 # Changelog
 
+## [integrations/pinecone-v5.4.0] - 2025-11-05
+
+### 🚀 Features
+
+- Add delete all documents to Pinecone DocumentStore (#2403)
+
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+
+### 🧪 Testing
+
+- Pinecone - relax flaky test (#2360)
+
+### ⚙️ CI
+
+- Install dependencies in the `test` environment when testing with lowest direct dependencies and Haystack main (#2418)
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Standardize readmes - part 2 (#2205)
+
+
+## [integrations/pinecone-v5.3.0] - 2025-07-30
+
+### 🚀 Features
+
+- Pinecone - add methods to close resources (#1972)
+
+
+## [integrations/pinecone-v5.2.0] - 2025-06-26
+
+### 🐛 Bug Fixes
+
+- Fix Pinecone types + add py.typed (#1993)
+
+### 🧪 Testing
+
+- Pinecone - use uuid for namespace names (#1984)
+
+### 🧹 Chores
+
+- Align core-integrations Hatch scripts (#1898)
+- Update md files for new hatch scripts (#1911)
+- Remove black (#1985)
+
+### 🌀 Miscellaneous
+
+- Test: Pinecone - reenable tests for `comparison_not_equal` and `or_operator` (#1871)
+
 ## [integrations/pinecone-v5.1.1] - 2025-05-28
 
 

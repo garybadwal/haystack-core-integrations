@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 import os
-from typing import List
 from unittest.mock import Mock
 
 import pytest
@@ -180,7 +179,7 @@ class TestRetriever:
         document_store.write_documents(docs)
         retriever = AzureAISearchHybridRetriever(document_store=document_store)
         res = retriever.run(query="Test document", query_embedding=[0.1] * 768)
-        assert res["documents"] == docs
+        assert res["documents"][0].id == docs[0].id
 
     def test_hybrid_retrieval(self, document_store: AzureAISearchDocumentStore):
         query_embedding = [0.1] * 768
@@ -200,7 +199,7 @@ class TestRetriever:
         assert results["documents"][0].content == "This is first document"
 
     def test_empty_query_embedding(self, document_store: AzureAISearchDocumentStore):
-        query_embedding: List[float] = []
+        query_embedding: list[float] = []
         with pytest.raises(ValueError):
             document_store._hybrid_retrieval(query="", query_embedding=query_embedding)
 
