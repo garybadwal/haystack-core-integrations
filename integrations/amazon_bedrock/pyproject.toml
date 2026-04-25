@@ -7,7 +7,7 @@ name = "amazon-bedrock-haystack"
 dynamic = ["version"]
 description = 'An integration of AWS S3 and Bedrock as a Downloader and Generator components.'
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "Apache-2.0"
 keywords = []
 authors = [{ name = "deepset GmbH", email = "info@deepset.ai" }]
@@ -15,15 +15,17 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
   "Development Status :: 4 - Beta",
   "Programming Language :: Python",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = ["haystack-ai>=2.19.0", "boto3>=1.28.57", "aioboto3>=14.0.0"]
+dependencies = ["haystack-ai>=2.24.1", "boto3>=1.42.84,<2", "aiobotocore>=3.4.0,<4"]
+
+
 
 [project.urls]
 Documentation = "https://github.com/deepset-ai/haystack-core-integrations/tree/main/integrations/amazon_bedrock#readme"
@@ -46,8 +48,8 @@ installer = "uv"
 dependencies = ["haystack-pydoc-tools", "ruff"]
 
 [tool.hatch.envs.default.scripts]
-docs = ["pydoc-markdown pydoc/config.yml"]
-fmt = "ruff check --fix {args} && ruff format {args}"
+docs = ["haystack-pydoc pydoc/config_docusaurus.yml"]
+fmt = "ruff check --fix {args}; ruff format {args}"
 fmt-check = "ruff check {args} && ruff format --check {args}"
 
 [tool.hatch.envs.test]
@@ -66,7 +68,8 @@ dependencies = [
 unit = 'pytest -m "not integration" {args:tests}'
 integration = 'pytest -m "integration" {args:tests}'
 all = 'pytest {args:tests}'
-cov-retry = 'pytest --cov=haystack_integrations --reruns 3 --reruns-delay 30 -x {args:tests}'
+unit-cov-retry = 'pytest --cov=haystack_integrations --reruns 3 --reruns-delay 30 -x -m "not integration" {args:tests}'
+integration-cov-append-retry = 'pytest --cov=haystack_integrations --cov-append --reruns 3 --reruns-delay 30 -x -m "integration" {args:tests}'
 
 types = """mypy -p haystack_integrations.common.amazon_bedrock \
 -p haystack_integrations.components.embedders.amazon_bedrock \
@@ -85,22 +88,29 @@ disallow_incomplete_defs = true
 [[tool.mypy.overrides]]
 # unfortunately, unofficial type stubs do not play well with some features of Bedrock
 module = [
-"aioboto3.*",
+"aiobotocore.*",
 "botocore.*",
 "boto3.*",
 ]
 ignore_missing_imports = true
 
 [tool.ruff]
-target-version = "py38"
 line-length = 120
 
 [tool.ruff.lint]
 select = [
   "A",
+  "ANN",
   "ARG",
   "B",
   "C",
+  "D102",   # Missing docstring in public method
+  "D103",   # Missing docstring in public function
+  "D205",   # 1 blank line required between summary line and description
+  "D209",   # Closing triple quotes go to new line
+  "D213",   # summary lines must be positioned on the second physical line of the docstring
+  "D417",   # Missing argument descriptions in the docstring
+  "D419",   # Docstring is empty
   "DTZ",
   "E",
   "EM",
@@ -125,6 +135,8 @@ select = [
 ignore = [
   # Allow non-abstract empty methods in abstract base classes
   "B027",
+  # Allow `Any` - used legitimately for **kwargs passed to AWS/boto3 APIs
+  "ANN401",
   # Ignore checks for possible passwords
   "S105",
   "S106",
@@ -140,10 +152,6 @@ ignore = [
   "ARG002",
   "ARG005",
 ]
-unfixable = [
-  # Don't touch unused imports
-  "F401",
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["haystack_integrations"]
@@ -153,17 +161,19 @@ ban-relative-imports = "parents"
 
 [tool.ruff.lint.per-file-ignores]
 # Tests can use magic values, assertions, and relative imports
-"tests/**/*" = ["PLR2004", "S101", "TID252"]
+"tests/**/*" = ["PLR2004", "S101", "TID252", "D", "ANN"]
 
 [tool.coverage.run]
 source = ["haystack_integrations"]
 branch = true
+relative_files = true
 parallel = true
 
 [tool.coverage.report]
 omit = ["*/tests/*", "*/__init__.py"]
 show_missing = true
 exclude_lines = ["no cov", "if __name__ == .__main__.:", "if TYPE_CHECKING:"]
+
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers"

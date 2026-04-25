@@ -7,7 +7,7 @@ name = "meta-llama-haystack"
 dynamic = ["version"]
 description = 'Use Llama models via Llama API'
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "Apache-2.0"
 keywords = []
 authors = [{ name = "deepset GmbH", email = "info@deepset.ai" }]
@@ -15,15 +15,15 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
   "Development Status :: 4 - Beta",
   "Programming Language :: Python",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = ["haystack-ai>=2.19.0"]
+dependencies = ["haystack-ai>=2.22.0"]
 
 [project.urls]
 Documentation = "https://github.com/deepset-ai/haystack-core-integrations/tree/main/integrations/meta_llama#readme"
@@ -45,8 +45,8 @@ git_describe_command = 'git describe --tags --match="integrations/meta_llama-v[0
 installer = "uv"
 dependencies = ["haystack-pydoc-tools", "ruff"]
 [tool.hatch.envs.default.scripts]
-docs = ["pydoc-markdown pydoc/config.yml"]
-fmt = "ruff check --fix {args} && ruff format {args}"
+docs = ["haystack-pydoc pydoc/config_docusaurus.yml"]
+fmt = "ruff check --fix {args}; ruff format {args}"
 fmt-check = "ruff check {args} && ruff format --check {args}"
 
 [tool.hatch.envs.test]
@@ -63,8 +63,9 @@ dependencies = [
 [tool.hatch.envs.test.scripts]
 unit = 'pytest -m "not integration" {args:tests}'
 integration = 'pytest -m "integration" {args:tests}'
-all = 'pytest --reruns 3 --reruns-delay 30 -x {args:tests}'
-cov-retry = 'pytest --cov="haystack_integrations" --reruns 3 --reruns-delay 30 -x {args:tests}'
+all = 'pytest {args:tests}'
+unit-cov-retry = 'pytest --cov=haystack_integrations --reruns 3 --reruns-delay 30 -x -m "not integration" {args:tests}'
+integration-cov-append-retry = 'pytest --cov=haystack_integrations --cov-append --reruns 3 --reruns-delay 30 -x -m "integration" {args:tests}'
 
 types = "mypy -p haystack_integrations.components.generators.meta_llama {args}"
 
@@ -75,15 +76,22 @@ check_untyped_defs = true
 disallow_incomplete_defs = true
 
 [tool.ruff]
-target-version = "py38"
 line-length = 120
 
 [tool.ruff.lint]
 select = [
   "A",
+  "ANN",
   "ARG",
   "B",
   "C",
+  "D102",   # Missing docstring in public method
+  "D103",   # Missing docstring in public function
+  "D205",   # 1 blank line required between summary line and description
+  "D209",   # Closing triple quotes go to new line
+  "D213",   # summary lines must be positioned on the second physical line of the docstring
+  "D417",   # Missing argument descriptions in the docstring
+  "D419",   # Docstring is empty
   "DTZ",
   "E",
   "EM",
@@ -121,10 +129,8 @@ ignore = [
   # Misc
   "B008",
   "S101",
-]
-unfixable = [
-  # Don't touch unused imports
-  "F401",
+  # Allow `Any` - used legitimately for dynamic types and SDK boundaries
+  "ANN401",
 ]
 
 [tool.ruff.lint.isort]
@@ -135,11 +141,12 @@ ban-relative-imports = "parents"
 
 [tool.ruff.lint.per-file-ignores]
 # Tests can use magic values, assertions, and relative imports
-"tests/**/*" = ["PLR2004", "S101", "TID252"]
+"tests/**/*" = ["D", "PLR2004", "S101", "TID252", "ANN"]
 
 [tool.coverage.run]
 source = ["haystack_integrations"]
 branch = true
+relative_files = true
 parallel = false
 
 

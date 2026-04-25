@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -258,6 +262,7 @@ class TestFastembedDocumentEmbedder:
             embedding_separator="\n",
         )
         embedder.embedding_backend = MagicMock()
+        embedder.embedding_backend.embed.return_value = [np.random.rand(3, 16).tolist() for _ in range(5)]
 
         documents = [Document(content=f"document-number {i}", meta={"meta_field": f"meta_value {i}"}) for i in range(5)]
 
@@ -276,12 +281,25 @@ class TestFastembedDocumentEmbedder:
             parallel=None,
         )
 
+    def test_run_calls_warm_up(self):
+        embedder = FastembedDocumentEmbedder()
+        assert embedder.embedding_backend is None
+
+        mock_backend = MagicMock()
+        mock_backend.embed.return_value = [[0.1, 0.2, 0.3]]
+
+        with patch.object(
+            embedder, "warm_up", side_effect=lambda: setattr(embedder, "embedding_backend", mock_backend)
+        ) as mock_warm_up:
+            embedder.run(documents=[Document(content="test document")])
+
+        mock_warm_up.assert_called_once()
+
     @pytest.mark.integration
     def test_run(self):
         embedder = FastembedDocumentEmbedder(
             model="BAAI/bge-small-en-v1.5",
         )
-        embedder.warm_up()
 
         doc = Document(content="Parton energy loss in QCD matter")
 

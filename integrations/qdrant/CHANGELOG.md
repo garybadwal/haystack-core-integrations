@@ -1,5 +1,78 @@
 # Changelog
 
+## [integrations/qdrant-v10.3.0] - 2026-03-23
+
+### 📚 Documentation
+
+- Simplify pydoc configs (#2855)
+
+### 🧪 Testing
+
+- Replacing each `DocumentStore` specific tests and used the generalised ones from `haystack.testing.document_store` (#2812)
+- Test compatible integrations with python 3.14; update pyproject (#3001)
+
+### 🧹 Chores
+
+- Standardize author mentions (#2897)
+- Add ANN ruff ruleset to optimum, paddleocr, pgvector, pinecone, pyversity, qdrant, ragas, snowflake (#2992)
+
+### 🌀 Miscellaneous
+
+- !test: `QdrantDocumentStore` use Mixin tests +  updated signature `get_metadata_fields_info(self) -> dict[str, dict[str, str]]`: (#3004)
+
+## [integrations/qdrant-v10.2.1] - 2026-02-02
+
+### 📚 Documentation
+
+- Fixing `QdrantDocumentStore` docstring parsing error (#2806)
+
+
+## [integrations/qdrant-v10.2.0] - 2026-02-02
+
+### 🌀 Miscellaneous
+
+- Feat: `QdrantDocumentStore` return number deleted docs on `delete_by_filter` (#2807)
+
+## [integrations/qdrant-v9.6.0] - 2026-02-02
+
+### 🚀 Features
+
+- Adding count with filtering operations to`QdrantDocumentStore` (#2803)
+
+### 🧹 Chores
+
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Qdrant - drop Python 3.9 and use X|Y typing (#2726)
+- Disabling progress bar in `QdrantDocumentStore` tests (#2797)
+
+### 🌀 Miscellaneous
+
+
+## [integrations/qdrant-v9.5.0] - 2026-01-07
+
+### 🚀 Features
+
+- Adding `delete_by_filter()` and `update_by_filter()` to `QdrantDocumentStore` (#2650)
+
+### 🐛 Bug Fixes
+
+- Fix types for qdrant-client 1.16.1 (#2561)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+
+
+## [integrations/qdrant-v9.4.0] - 2025-11-18
+
+### 🧹 Chores
+
+- [**breaking**] Qdrant - remove `init_from` init parameter for compatibility with `qdrant-client==1.16.0` (#2531)
+
+### 🌀 Miscellaneous
+
+- Enhancement: Adopt PEP 585 type hinting (part 5) (#2528)
+
 ## [integrations/qdrant-v9.3.0] - 2025-11-11
 
 ### 🚀 Features

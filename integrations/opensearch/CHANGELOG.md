@@ -1,5 +1,173 @@
 # Changelog
 
+## [integrations/opensearch-v7.2.1] - 2026-04-13
+
+### 🐛 Bug Fixes
+
+- *(opensearch)* Pass positional args to transport.perform_request for ddtrace compatibility (#3132)
+
+
+## [integrations/opensearch-v7.2.0] - 2026-04-10
+
+### 🚀 Features
+
+- *(opensearch)* Add support for nested fields in OpenSearchDocumentStore (#3117)
+
+### 🐛 Bug Fixes
+
+- Replace in-place dataclass mutations in document stores (#3114)
+
+### 🧪 Testing
+
+- Better categorize some Document Stores tests (#3085)
+
+
+## [integrations/opensearch-v7.1.0] - 2026-04-01
+
+### 🚀 Features
+
+- *(opensearch)* Handle errors due to clause overflow caused by fuzziness (#3068)
+
+### 🚜 Refactor
+
+- Weaviate, chroma, elasticsearch, opensearch, azure_ai_search use `_normalize_metadata_field_name` from haystack.utils (#2953)
+
+### 🧪 Testing
+
+- `OpensearchDocumentStore` use more Mixin tests (#3002)
+- Test compatible integrations with python 3.14; update pyproject (#3001)
+- Track test coverage for all integrations (#3065)
+
+### 🧹 Chores
+
+- Add ANN ruff ruleset to llama_cpp, llama_stack, mcp, meta_llama, mistral, mongodb_atlas, nvidia, ollama, openrouter, opensearch (#2991)
+- Enforce ruff docstring rules in integrations 31-40 (openrouter, opensearch, optimum, paddleocr, pgvector, pinecone, pyversity, qdrant, ragas, snowflake) (#3011)
+
+
+## [integrations/opensearch-v7.0.0] - 2026-03-19
+
+### 🐛 Bug Fixes
+
+- OpenSearch - do not serialize string Secrets + authentication refactoring (#2967)
+
+
+## [integrations/opensearch-v6.5.1] - 2026-03-10
+
+### 🐛 Bug Fixes
+
+- `OpenSearchDocumentStore` AsyncAWSAuth method signature changed (#2938)
+
+### 🧹 Chores
+
+- Standardize author mentions (#2897)
+
+
+## [integrations/opensearch-v6.5.0] - 2026-02-26
+
+### 🐛 Bug Fixes
+
+- OpenSearch-3.x SQL stopped supporting DSL-format SQL JSON (#2876)
+
+### 📚 Documentation
+
+- Simplify pydoc configs (#2855)
+
+### 🧪 Testing
+
+- Replacing each `DocumentStore` specific tests and used the generalised ones from `haystack.testing.document_store` (#2812)
+
+### 🧹 Chores
+
+- Remove unused allow-direct-references (#2866)
+
+
+## [integrations/opensearch-v6.4.0] - 2026-02-11
+
+### 🚀 Features
+
+- Support additional `search_kwargs` with `OpenSearchEmbeddingRetriever` (#2825)
+
+
+## [integrations/opensearch-v6.3.0] - 2026-01-30
+
+### 🚀 Features
+
+- Add an `SQLRetriever` to `OpenSearchDocumentStore` (#2746)
+- Adding a `MetadataRetriever` to `OpenSearchDocumentStore` (#2771)
+
+
+## [integrations/opensearch-v6.2.0] - 2026-01-19
+
+### 🚀 Features
+
+- Updating `opensearch-py` dependency (#2763)
+
+
+## [integrations/opensearch-v6.1.2] - 2026-01-16
+
+### 🐛 Bug Fixes
+
+- Docs: fixing docstring in `OpenSearchDocumentStore` (#2758)
+
+
+## [integrations/opensearch-v6.1.1] - 2026-01-16
+
+### 🐛 Bug Fixes
+
+- Docs: fixing docstrings in `OpenSearchDocumentStore` (#2757)
+
+
+## [integrations/opensearch-v6.1.0] - 2026-01-16
+
+### 🚀 Features
+
+- Adding  count with filtering operations to `OpenSearchDocumentStore` (#2653)
+
+
+## [integrations/opensearch-v6.0.0] - 2026-01-13
+
+### 🧪 Testing
+
+- Add `pytest-xdist` to execute tests in parallel on CI (and/or locally) (#2672)
+
+### 🧹 Chores
+
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Opensearch - drop Python 3.9 and use X|Y typing (#2744)
+
+
+## [integrations/opensearch-v5.1.0] - 2026-01-08
+
+### 🌀 Miscellaneous
+
+- Feat: Add routing support for OpenSearchDocumentStore (#2624)
+
+## [integrations/opensearch-v5.0.0] - 2026-01-07
+
+### 🚀 Features
+
+- [**breaking**] Expose refresh parameter in `OpenSearchDocumentStore` (#2623)
+
+
+## [integrations/opensearch-v4.6.0] - 2026-01-05
+
+### 🐛 Bug Fixes
+
+- Fix failing tests for opensearch and ollama (#2500)
+- OpenSearch async client initialization (#2645)
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+
+### 🌀 Miscellaneous
+
+- Enhancement: Adopt PEP 585 type hinting (part 5) (#2528)
+
 ## [integrations/opensearch-v4.5.0] - 2025-10-27
 
 ### 🚀 Features

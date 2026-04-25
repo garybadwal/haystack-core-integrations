@@ -60,7 +60,7 @@ def mock_async_chat_completion():
     ) as mock_chat_completion_create:
         completion = ChatCompletion(
             id="foo",
-            model="openai/gpt-4o-mini",
+            model="openai/gpt-5-mini",
             object="chat.completion",
             choices=[
                 Choice(
@@ -136,7 +136,7 @@ class TestOpenRouterChatGeneratorAsync:
         assert len(results["replies"]) == 1
         message: ChatMessage = results["replies"][0]
         assert "Paris" in message.text
-        assert "openai/gpt-4o-mini" in message.meta["model"]
+        assert "openai/gpt-5-mini" in message.meta["model"]
         assert message.meta["finish_reason"] == "stop"
 
     @pytest.mark.skipif(
@@ -162,7 +162,7 @@ class TestOpenRouterChatGeneratorAsync:
         message: ChatMessage = results["replies"][0]
         assert "Paris" in message.text
 
-        assert "openai/gpt-4o-mini" in message.meta["model"]
+        assert "openai/gpt-5-mini" in message.meta["model"]
         assert message.meta["finish_reason"] == "stop"
 
         assert counter > 1
@@ -198,7 +198,7 @@ class TestOpenRouterChatGeneratorAsync:
         tool_call = tool_message.tool_call
         assert tool_call.id, "Tool call does not contain value for 'id' key"
         assert tool_call.tool_name == "weather"
-        assert tool_call.arguments == {"city": "Paris"}
+        assert "paris" in tool_call.arguments["city"].lower(), f"Expected 'paris' in city: {tool_call.arguments}"
         assert tool_message.meta["finish_reason"] == "tool_calls"
 
         new_messages = [
@@ -260,7 +260,7 @@ class TestOpenRouterChatGeneratorAsync:
         tool_call = tool_message.tool_call
         assert tool_call.id, "Tool call does not contain value for 'id' key"
         assert tool_call.tool_name == "weather"
-        assert tool_call.arguments == {"city": "Paris"}
+        assert "paris" in tool_call.arguments["city"].lower(), f"Expected 'paris' in city: {tool_call.arguments}"
         assert tool_message.meta["finish_reason"] == "tool_calls"
 
     @pytest.mark.skipif(
@@ -314,7 +314,7 @@ class TestOpenRouterChatGeneratorAsync:
 
         # Pass mixed list: echo_tool (individual) and toolset (weather + time) at runtime
         # This tests that both individual tools and toolsets can be combined
-        messages = [ChatMessage.from_user("Echo this: Hello World")]
+        messages = [ChatMessage.from_user("Echo this via tool: Hello World")]
         results = await component.run_async(messages, tools=[echo_tool, toolset])
 
         assert len(results["replies"]) == 1

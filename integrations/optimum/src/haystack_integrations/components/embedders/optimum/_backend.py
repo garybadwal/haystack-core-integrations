@@ -1,15 +1,18 @@
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import copy
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union, overload
+from typing import Any, overload
 
 import numpy as np
 import torch
 from haystack.utils import Secret, deserialize_secrets_inplace
 from haystack.utils.hf import HFModelType, check_valid_model, deserialize_hf_model_kwargs, serialize_hf_model_kwargs
 from huggingface_hub import hf_hub_download
-from sentence_transformers.models import Pooling as SentenceTransformerPoolingLayer
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from transformers.modeling_outputs import BaseModelOutput
@@ -24,24 +27,33 @@ from .optimization import OptimumEmbedderOptimizationConfig
 from .pooling import OptimumEmbedderPooling
 from .quantization import OptimumEmbedderQuantizationConfig
 
+# for sentence-transformers Pooling, we use the new module path if available. It also ships correct types
+# we also keep compatibility with older versions of sentence-transformers
+try:
+    from sentence_transformers.sentence_transformer.modules import Pooling as SentenceTransformerPoolingLayer
+except ImportError:
+    from sentence_transformers.models import (  # type: ignore[import-not-found, no-redef]
+        Pooling as SentenceTransformerPoolingLayer,
+    )
+
 
 @dataclass
 class _EmbedderParams:
     model: str
-    token: Optional[Secret]
+    token: Secret | None
     prefix: str
     suffix: str
     normalize_embeddings: bool
     onnx_execution_provider: str
     batch_size: int
     progress_bar: bool
-    pooling_mode: Optional[Union[str, OptimumEmbedderPooling]]
-    model_kwargs: Optional[Dict[str, Any]]
-    working_dir: Optional[str]
-    optimizer_settings: Optional[OptimumEmbedderOptimizationConfig]
-    quantizer_settings: Optional[OptimumEmbedderQuantizationConfig]
+    pooling_mode: str | OptimumEmbedderPooling | None
+    model_kwargs: dict[str, Any] | None
+    working_dir: str | None
+    optimizer_settings: OptimumEmbedderOptimizationConfig | None
+    quantizer_settings: OptimumEmbedderQuantizationConfig | None
 
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> dict[str, Any]:
         out = {}
         for field in self.__dataclass_fields__.keys():
             if field in [
@@ -66,7 +78,7 @@ class _EmbedderParams:
         return out
 
     @classmethod
-    def deserialize_inplace(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+    def deserialize_inplace(cls, data: dict[str, Any]) -> dict[str, Any]:
         data["pooling_mode"] = OptimumEmbedderPooling.from_str(data["pooling_mode"])
         if data["optimizer_settings"] is not None:
             data["optimizer_settings"] = OptimumEmbedderOptimizationConfig.from_dict(data["optimizer_settings"])
@@ -79,7 +91,7 @@ class _EmbedderParams:
 
 
 class _EmbedderBackend:
-    def __init__(self, params: _EmbedderParams):
+    def __init__(self, params: _EmbedderParams) -> None:
         check_valid_model(params.model, HFModelType.EMBEDDING, params.token)
         resolved_token = params.token.resolve_value() if params.token else None
 
@@ -111,9 +123,9 @@ class _EmbedderBackend:
         self.params = params
         self.model = None
         self.tokenizer = None
-        self.pooling_layer: Optional[SentenceTransformerPoolingLayer] = None
+        self.pooling_layer: SentenceTransformerPoolingLayer | None = None
 
-    def warm_up(self):
+    def warm_up(self) -> None:
         assert self.params.model_kwargs
         model_kwargs = copy.deepcopy(self.params.model_kwargs)
         model = ORTModelForFeatureExtraction.from_pretrained(**model_kwargs, export=True)
@@ -167,7 +179,7 @@ class _EmbedderBackend:
             pooling_mode_lasttoken=self.params.pooling_mode == OptimumEmbedderPooling.LAST_TOKEN,
         )
 
-    def _tokenize_and_generate_outputs(self, texts: List[str]) -> Tuple[Dict[str, Any], BaseModelOutput]:
+    def _tokenize_and_generate_outputs(self, texts: list[str]) -> tuple[dict[str, Any], BaseModelOutput]:
         assert self.model is not None
         assert self.tokenizer is not None
 
@@ -189,15 +201,15 @@ class _EmbedderBackend:
         return pooled_outputs["sentence_embedding"]
 
     @overload
-    def embed_texts(self, texts_to_embed: str) -> List[float]: ...
+    def embed_texts(self, texts_to_embed: str) -> list[float]: ...
 
     @overload
-    def embed_texts(self, texts_to_embed: List[str]) -> List[List[float]]: ...
+    def embed_texts(self, texts_to_embed: list[str]) -> list[list[float]]: ...
 
     def embed_texts(
         self,
-        texts_to_embed: Union[str, List[str]],
-    ) -> Union[List[List[float]], List[float]]:
+        texts_to_embed: str | list[str],
+    ) -> list[list[float]] | list[float]:
         assert self.model is not None
         assert self.tokenizer is not None
 
@@ -231,8 +243,8 @@ class _EmbedderBackend:
         embeddings = embeddings.tolist()
 
         # Reorder embeddings according to original order
-        reordered_embeddings: List[List[float]] = [None] * len(texts)  # type: ignore
-        for embedding, idx in zip(embeddings, length_sorted_idx):
+        reordered_embeddings: list[list[float]] = [None] * len(texts)  # type: ignore
+        for embedding, idx in zip(embeddings, length_sorted_idx, strict=True):
             reordered_embeddings[idx] = embedding
 
         if isinstance(texts_to_embed, str):
@@ -241,7 +253,7 @@ class _EmbedderBackend:
             return reordered_embeddings
 
 
-def _pooling_from_model_config(model: str, token: Optional[str] = None) -> Optional[OptimumEmbedderPooling]:
+def _pooling_from_model_config(model: str, token: str | None = None) -> OptimumEmbedderPooling | None:
     try:
         pooling_config_path = hf_hub_download(repo_id=model, token=token, filename="1_Pooling/config.json")
     except Exception as e:

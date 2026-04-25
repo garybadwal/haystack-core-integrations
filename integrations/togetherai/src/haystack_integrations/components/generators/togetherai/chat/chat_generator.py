@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from haystack import component, default_to_dict, logging
 from haystack.components.generators.chat import OpenAIChatGenerator
@@ -10,6 +10,8 @@ from haystack.dataclasses import StreamingCallbackT
 from haystack.tools import ToolsType
 from haystack.utils import serialize_callable
 from haystack.utils.auth import Secret
+from openai.lib._pydantic import to_strict_json_schema
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,7 @@ logger = logging.getLogger(__name__)
 class TogetherAIChatGenerator(OpenAIChatGenerator):
     """
     Enables text generation using Together AI generative models.
+
     For supported models, see [Together AI docs](https://docs.together.ai/docs).
 
     Users can pass any text generation parameters valid for the Together AI chat completion API
@@ -61,17 +64,16 @@ class TogetherAIChatGenerator(OpenAIChatGenerator):
         *,
         api_key: Secret = Secret.from_env_var("TOGETHER_API_KEY"),
         model: str = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        api_base_url: Optional[str] = "https://api.together.xyz/v1",
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
-        timeout: Optional[float] = None,
-        max_retries: Optional[int] = None,
-        http_client_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+        streaming_callback: StreamingCallbackT | None = None,
+        api_base_url: str | None = "https://api.together.xyz/v1",
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        http_client_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """
-        Creates an instance of TogetherAIChatGenerator. Unless specified otherwise,
-        the default model is `meta-llama/Llama-3.3-70B-Instruct-Turbo`.
+        Creates an instance of TogetherAIChatGenerator.
 
         :param api_key:
             The Together API key.
@@ -98,6 +100,13 @@ class TogetherAIChatGenerator(OpenAIChatGenerator):
                 events as they become available, with the stream terminated by a data: [DONE] message.
             - `safe_prompt`: Whether to inject a safety prompt before all conversations.
             - `random_seed`: The seed to use for random sampling.
+            - `response_format`: A JSON schema or a Pydantic model that enforces the structure of the model's response.
+                If provided, the output will always be validated against this
+                format (unless the model returns a tool call).
+                For details, see the [OpenAI Structured Outputs documentation](https://platform.openai.com/docs/guides/structured-outputs).
+                Notes:
+                - For structured outputs with streaming,
+                  the `response_format` must be a JSON schema and not a Pydantic model.
         :param tools:
             A list of Tool and/or Toolset objects, or a single Toolset for which the model can prepare calls.
             Each tool should have a unique name.
@@ -123,7 +132,7 @@ class TogetherAIChatGenerator(OpenAIChatGenerator):
             http_client_kwargs=http_client_kwargs,
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize this component to a dictionary.
 
@@ -131,6 +140,21 @@ class TogetherAIChatGenerator(OpenAIChatGenerator):
             The serialized component as a dictionary.
         """
         callback_name = serialize_callable(self.streaming_callback) if self.streaming_callback else None
+        generation_kwargs = self.generation_kwargs.copy()
+        response_format = generation_kwargs.get("response_format")
+        # If the response format is a Pydantic model, it's converted to openai's json schema format
+        # If it's already a json schema, it's left as is
+        if response_format and isinstance(response_format, type) and issubclass(response_format, BaseModel):
+            json_schema = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": response_format.__name__,
+                    "strict": True,
+                    "schema": to_strict_json_schema(response_format),
+                },
+            }
+
+            generation_kwargs["response_format"] = json_schema
 
         # if we didn't implement the to_dict method here then the to_dict method of the superclass would be used
         # which would serialiaze some fields that we don't want to serialize (e.g. the ones we don't have in
@@ -141,7 +165,7 @@ class TogetherAIChatGenerator(OpenAIChatGenerator):
             model=self.model,
             streaming_callback=callback_name,
             api_base_url=self.api_base_url,
-            generation_kwargs=self.generation_kwargs,
+            generation_kwargs=generation_kwargs,
             api_key=self.api_key.to_dict(),
             tools=[tool.to_dict() for tool in self.tools] if self.tools else None,
             timeout=self.timeout,

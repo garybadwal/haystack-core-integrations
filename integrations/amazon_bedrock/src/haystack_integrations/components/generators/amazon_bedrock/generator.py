@@ -1,13 +1,14 @@
 import json
 import re
 import warnings
-from typing import Any, Callable, ClassVar, Dict, List, Literal, Optional, Type, Union, get_args
+from collections.abc import Callable
+from typing import Any, ClassVar, Literal, get_args
 
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from haystack import component, default_from_dict, default_to_dict, logging
 from haystack.dataclasses import StreamingChunk
-from haystack.utils import Secret, deserialize_callable, deserialize_secrets_inplace, serialize_callable
+from haystack.utils import Secret, deserialize_callable, serialize_callable
 
 from haystack_integrations.common.amazon_bedrock.errors import (
     AmazonBedrockConfigurationError,
@@ -58,21 +59,24 @@ class AmazonBedrockGenerator:
     automatically from the environment or the AWS configuration file.
     If the AWS environment is not configured, set `aws_access_key_id`, `aws_secret_access_key`,
     `aws_session_token`, and `aws_region_name` as environment variables or pass them as
-     [Secret](https://docs.haystack.deepset.ai/v2.0/docs/secret-management) arguments. Make sure the region you set
+     [Secret](https://docs.haystack.deepset.ai/docs/secret-management) arguments. Make sure the region you set
     supports Amazon Bedrock.
     """
 
-    SUPPORTED_MODEL_PATTERNS: ClassVar[Dict[str, Type[BedrockModelAdapter]]] = {
-        r"([a-z]{2}\.)?amazon.titan-text.*": AmazonTitanAdapter,
-        r"([a-z]{2}\.)?ai21.j2.*": AI21LabsJurassic2Adapter,
-        r"([a-z]{2}\.)?cohere.command-[^r].*": CohereCommandAdapter,
-        r"([a-z]{2}\.)?cohere.command-r.*": CohereCommandRAdapter,
-        r"([a-z]{2}\.)?anthropic.claude.*": AnthropicClaudeAdapter,
-        r"([a-z]{2}\.)?meta.llama.*": MetaLlamaAdapter,
-        r"([a-z]{2}\.)?mistral.*": MistralAdapter,
+    # Regex pattern for supported AWS Bedrock region prefixes
+    _REGION_PREFIX_PATTERN = r"((?:global|us-gov|us|eu|apac|au|ca|jp)\.)?"
+
+    SUPPORTED_MODEL_PATTERNS: ClassVar[dict[str, type[BedrockModelAdapter]]] = {
+        rf"{_REGION_PREFIX_PATTERN}amazon.titan-text.*": AmazonTitanAdapter,
+        rf"{_REGION_PREFIX_PATTERN}ai21.j2.*": AI21LabsJurassic2Adapter,
+        rf"{_REGION_PREFIX_PATTERN}cohere.command-[^r].*": CohereCommandAdapter,
+        rf"{_REGION_PREFIX_PATTERN}cohere.command-r.*": CohereCommandRAdapter,
+        rf"{_REGION_PREFIX_PATTERN}anthropic.claude.*": AnthropicClaudeAdapter,
+        rf"{_REGION_PREFIX_PATTERN}meta.llama.*": MetaLlamaAdapter,
+        rf"{_REGION_PREFIX_PATTERN}mistral.*": MistralAdapter,
     }
 
-    SUPPORTED_MODEL_FAMILIES: ClassVar[Dict[str, Type[BedrockModelAdapter]]] = {
+    SUPPORTED_MODEL_FAMILIES: ClassVar[dict[str, type[BedrockModelAdapter]]] = {
         "amazon.titan-text": AmazonTitanAdapter,
         "ai21.j2": AI21LabsJurassic2Adapter,
         "cohere.command": CohereCommandAdapter,
@@ -95,18 +99,18 @@ class AmazonBedrockGenerator:
     def __init__(
         self,
         model: str,
-        aws_access_key_id: Optional[Secret] = Secret.from_env_var("AWS_ACCESS_KEY_ID", strict=False),  # noqa: B008
-        aws_secret_access_key: Optional[Secret] = Secret.from_env_var(  # noqa: B008
+        aws_access_key_id: Secret | None = Secret.from_env_var("AWS_ACCESS_KEY_ID", strict=False),  # noqa: B008
+        aws_secret_access_key: Secret | None = Secret.from_env_var(  # noqa: B008
             "AWS_SECRET_ACCESS_KEY", strict=False
         ),
-        aws_session_token: Optional[Secret] = Secret.from_env_var("AWS_SESSION_TOKEN", strict=False),  # noqa: B008
-        aws_region_name: Optional[Secret] = Secret.from_env_var("AWS_DEFAULT_REGION", strict=False),  # noqa: B008
-        aws_profile_name: Optional[Secret] = Secret.from_env_var("AWS_PROFILE", strict=False),  # noqa: B008
-        max_length: Optional[int] = None,
-        truncate: Optional[bool] = None,
-        streaming_callback: Optional[Callable[[StreamingChunk], None]] = None,
-        boto3_config: Optional[Dict[str, Any]] = None,
-        model_family: Optional[MODEL_FAMILIES] = None,
+        aws_session_token: Secret | None = Secret.from_env_var("AWS_SESSION_TOKEN", strict=False),  # noqa: B008
+        aws_region_name: Secret | None = Secret.from_env_var("AWS_DEFAULT_REGION", strict=False),  # noqa: B008
+        aws_profile_name: Secret | None = Secret.from_env_var("AWS_PROFILE", strict=False),  # noqa: B008
+        max_length: int | None = None,
+        truncate: bool | None = None,
+        streaming_callback: Callable[[StreamingChunk], None] | None = None,
+        boto3_config: dict[str, Any] | None = None,
+        model_family: MODEL_FAMILIES | None = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -123,7 +127,9 @@ class AmazonBedrockGenerator:
         :param truncate: Deprecated. This parameter no longer has any effect.
         :param streaming_callback: A callback function that is called when a new token is received from the stream.
             The callback function accepts StreamingChunk as an argument.
-        :param boto3_config: The configuration for the boto3 client.
+        :param boto3_config: Dictionary of configuration options for the underlying Boto3 client.
+            Can be used to tune [retry behavior](https://docs.aws.amazon.com/boto3/latest/guide/retries.html)
+            and other low-level settings like timeouts and connection management.
         :param model_family: The model family to use. If not provided, the model adapter is selected based on the model
             name.
         :param kwargs: Additional keyword arguments to be passed to the model.
@@ -156,7 +162,7 @@ class AmazonBedrockGenerator:
         self.kwargs = kwargs
         self.model_family = model_family
 
-        def resolve_secret(secret: Optional[Secret]) -> Optional[str]:
+        def resolve_secret(secret: Secret | None) -> str | None:
             return secret.resolve_value() if secret else None
 
         try:
@@ -183,13 +189,13 @@ class AmazonBedrockGenerator:
         model_adapter_cls = self.get_model_adapter(model=model, model_family=model_family)
         self.model_adapter = model_adapter_cls(model_kwargs=model_input_kwargs, max_length=self.max_length)
 
-    @component.output_types(replies=List[str], meta=Dict[str, Any])
+    @component.output_types(replies=list[str], meta=dict[str, Any])
     def run(
         self,
         prompt: str,
-        streaming_callback: Optional[Callable[[StreamingChunk], None]] = None,
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Union[List[str], Dict[str, Any]]]:
+        streaming_callback: Callable[[StreamingChunk], None] | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+    ) -> dict[str, list[str] | dict[str, Any]]:
         """
         Generates a list of string response to the given prompt.
 
@@ -240,7 +246,7 @@ class AmazonBedrockGenerator:
         return {"replies": replies, "meta": metadata}
 
     @classmethod
-    def get_model_adapter(cls, model: str, model_family: Optional[str] = None) -> Type[BedrockModelAdapter]:
+    def get_model_adapter(cls, model: str, model_family: str | None = None) -> type[BedrockModelAdapter]:
         """
         Gets the model adapter for the given model.
 
@@ -273,7 +279,7 @@ class AmazonBedrockGenerator:
         )
         raise AmazonBedrockConfigurationError(msg)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -283,11 +289,11 @@ class AmazonBedrockGenerator:
         callback_name = serialize_callable(self.streaming_callback) if self.streaming_callback else None
         return default_to_dict(
             self,
-            aws_access_key_id=self.aws_access_key_id.to_dict() if self.aws_access_key_id else None,
-            aws_secret_access_key=self.aws_secret_access_key.to_dict() if self.aws_secret_access_key else None,
-            aws_session_token=self.aws_session_token.to_dict() if self.aws_session_token else None,
-            aws_region_name=self.aws_region_name.to_dict() if self.aws_region_name else None,
-            aws_profile_name=self.aws_profile_name.to_dict() if self.aws_profile_name else None,
+            aws_access_key_id=self.aws_access_key_id,
+            aws_secret_access_key=self.aws_secret_access_key,
+            aws_session_token=self.aws_session_token,
+            aws_region_name=self.aws_region_name,
+            aws_profile_name=self.aws_profile_name,
             model=self.model,
             max_length=self.max_length,
             streaming_callback=callback_name,
@@ -297,7 +303,7 @@ class AmazonBedrockGenerator:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AmazonBedrockGenerator":
+    def from_dict(cls, data: dict[str, Any]) -> "AmazonBedrockGenerator":
         """
         Deserializes the component from a dictionary.
 
@@ -306,10 +312,6 @@ class AmazonBedrockGenerator:
         :returns:
             Deserialized component.
         """
-        deserialize_secrets_inplace(
-            data["init_parameters"],
-            ["aws_access_key_id", "aws_secret_access_key", "aws_session_token", "aws_region_name", "aws_profile_name"],
-        )
         init_params = data.get("init_parameters", {})
         serialized_callback_handler = init_params.get("streaming_callback")
         if serialized_callback_handler:

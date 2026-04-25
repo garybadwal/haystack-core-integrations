@@ -17,6 +17,12 @@ def chat_messages():
 
 
 class TestAnthropicVertexChatGenerator:
+    def test_supported_models(self):
+        """SUPPORTED_MODELS is a non-empty list of strings."""
+        assert isinstance(AnthropicVertexChatGenerator.SUPPORTED_MODELS, list)
+        assert len(AnthropicVertexChatGenerator.SUPPORTED_MODELS) > 0
+        assert all(isinstance(m, str) for m in AnthropicVertexChatGenerator.SUPPORTED_MODELS)
+
     def test_init_default(self):
         component = AnthropicVertexChatGenerator(region="us-central1", project_id="test-project-id")
         assert component.region == "us-central1"
@@ -208,7 +214,7 @@ class TestAnthropicVertexChatGeneratorAsync:
         assert len(results["replies"]) == 1
         message: ChatMessage = results["replies"][0]
         assert "Paris" in message.text
-        assert "claude-sonnet-4-20250514" in message.meta["model"]
+        assert "claude-sonnet-4-5" in message.meta["model"]
         assert message.meta["finish_reason"] == "stop"
 
     # Anthropic messages API is similar for AnthropicVertex and Anthropic endpoint,

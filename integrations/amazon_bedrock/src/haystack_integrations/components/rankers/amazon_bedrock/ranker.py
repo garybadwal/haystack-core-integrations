@@ -1,8 +1,9 @@
-from typing import Any, Dict, List, Optional
+from dataclasses import replace
+from typing import Any
 
 from botocore.exceptions import ClientError
 from haystack import Document, component, default_from_dict, default_to_dict, logging
-from haystack.utils import Secret, deserialize_secrets_inplace
+from haystack.utils import Secret
 
 from haystack_integrations.common.amazon_bedrock.errors import (
     AmazonBedrockConfigurationError,
@@ -52,7 +53,7 @@ class AmazonBedrockRanker:
     automatically from the environment or the AWS configuration file.
     If the AWS environment is not configured, set `aws_access_key_id`, `aws_secret_access_key`,
     and `aws_region_name` as environment variables or pass them as
-    [Secret](https://docs.haystack.deepset.ai/v2.0/docs/secret-management) arguments. Make sure the region you set
+    [Secret](https://docs.haystack.deepset.ai/docs/secret-management) arguments. Make sure the region you set
     supports Amazon Bedrock.
     """
 
@@ -60,20 +61,17 @@ class AmazonBedrockRanker:
         self,
         model: str = "cohere.rerank-v3-5:0",
         top_k: int = 10,
-        aws_access_key_id: Optional[Secret] = Secret.from_env_var(["AWS_ACCESS_KEY_ID"], strict=False),  # noqa: B008
-        aws_secret_access_key: Optional[Secret] = Secret.from_env_var(  # noqa: B008
+        aws_access_key_id: Secret | None = Secret.from_env_var(["AWS_ACCESS_KEY_ID"], strict=False),  # noqa: B008
+        aws_secret_access_key: Secret | None = Secret.from_env_var(  # noqa: B008
             ["AWS_SECRET_ACCESS_KEY"], strict=False
         ),
-        aws_session_token: Optional[Secret] = Secret.from_env_var(["AWS_SESSION_TOKEN"], strict=False),  # noqa: B008
-        aws_region_name: Optional[Secret] = Secret.from_env_var(["AWS_DEFAULT_REGION"], strict=False),  # noqa: B008
-        aws_profile_name: Optional[Secret] = Secret.from_env_var(["AWS_PROFILE"], strict=False),  # noqa: B008
-        max_chunks_per_doc: Optional[int] = None,
-        meta_fields_to_embed: Optional[List[str]] = None,
+        aws_session_token: Secret | None = Secret.from_env_var(["AWS_SESSION_TOKEN"], strict=False),  # noqa: B008
+        aws_region_name: Secret | None = Secret.from_env_var(["AWS_DEFAULT_REGION"], strict=False),  # noqa: B008
+        aws_profile_name: Secret | None = Secret.from_env_var(["AWS_PROFILE"], strict=False),  # noqa: B008
+        max_chunks_per_doc: int | None = None,
+        meta_fields_to_embed: list[str] | None = None,
         meta_data_separator: str = "\n",
     ) -> None:
-        if not model:
-            msg = "'model' cannot be None or empty string"
-            raise ValueError(msg)
         """
         Creates an instance of the 'AmazonBedrockRanker'.
 
@@ -92,6 +90,9 @@ class AmazonBedrockRanker:
         :param meta_data_separator: Separator used to concatenate the meta fields
             to the Document content.
         """
+        if not model:
+            msg = "'model' cannot be None or empty string"
+            raise ValueError(msg)
         self.model_name = model
         self.aws_access_key_id = aws_access_key_id
         self.aws_secret_access_key = aws_secret_access_key
@@ -103,7 +104,7 @@ class AmazonBedrockRanker:
         self.meta_fields_to_embed = meta_fields_to_embed or []
         self.meta_data_separator = meta_data_separator
 
-        def resolve_secret(secret: Optional[Secret]) -> Optional[str]:
+        def resolve_secret(secret: Secret | None) -> str | None:
             return secret.resolve_value() if secret else None
 
         try:
@@ -122,7 +123,7 @@ class AmazonBedrockRanker:
             )
             raise AmazonBedrockConfigurationError(msg) from exception
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -132,11 +133,11 @@ class AmazonBedrockRanker:
         return default_to_dict(
             self,
             model=self.model_name,
-            aws_access_key_id=self.aws_access_key_id.to_dict() if self.aws_access_key_id else None,
-            aws_secret_access_key=self.aws_secret_access_key.to_dict() if self.aws_secret_access_key else None,
-            aws_session_token=self.aws_session_token.to_dict() if self.aws_session_token else None,
-            aws_region_name=self.aws_region_name.to_dict() if self.aws_region_name else None,
-            aws_profile_name=self.aws_profile_name.to_dict() if self.aws_profile_name else None,
+            aws_access_key_id=self.aws_access_key_id,
+            aws_secret_access_key=self.aws_secret_access_key,
+            aws_session_token=self.aws_session_token,
+            aws_region_name=self.aws_region_name,
+            aws_profile_name=self.aws_profile_name,
             top_k=self.top_k,
             max_chunks_per_doc=self.max_chunks_per_doc,
             meta_fields_to_embed=self.meta_fields_to_embed,
@@ -144,7 +145,7 @@ class AmazonBedrockRanker:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AmazonBedrockRanker":
+    def from_dict(cls, data: dict[str, Any]) -> "AmazonBedrockRanker":
         """
         Deserializes the component from a dictionary.
 
@@ -153,15 +154,12 @@ class AmazonBedrockRanker:
         :returns:
             The deserialized component.
         """
-        deserialize_secrets_inplace(
-            data["init_parameters"],
-            ["aws_access_key_id", "aws_secret_access_key", "aws_session_token", "aws_region_name", "aws_profile_name"],
-        )
         return default_from_dict(cls, data)
 
-    def _prepare_bedrock_input_docs(self, documents: List[Document]) -> List[str]:
+    def _prepare_bedrock_input_docs(self, documents: list[Document]) -> list[str]:
         """
         Prepare the input by concatenating the document text with the metadata fields specified.
+
         :param documents: The list of Document objects.
 
         :return: A list of strings to be given as input to Bedrock model.
@@ -176,8 +174,8 @@ class AmazonBedrockRanker:
 
         return concatenated_input_list
 
-    @component.output_types(documents=List[Document])
-    def run(self, query: str, documents: List[Document], top_k: Optional[int] = None) -> Dict[str, List[Document]]:
+    @component.output_types(documents=list[Document])
+    def run(self, query: str, documents: list[Document], top_k: int | None = None) -> dict[str, list[Document]]:
         """
         Use the Amazon Bedrock Reranker to re-rank the list of documents based on the query.
 
@@ -201,7 +199,7 @@ class AmazonBedrockRanker:
         if not documents:
             return {"documents": []}
 
-        def resolve_secret(secret: Optional[Secret]) -> Optional[str]:
+        def resolve_secret(secret: Secret | None) -> str | None:
             return secret.resolve_value() if secret else None
 
         region = resolve_secret(self.aws_region_name)
@@ -251,8 +249,7 @@ class AmazonBedrockRanker:
                 idx = result["index"]
                 score = result["relevanceScore"]
                 doc = documents[idx]
-                doc.score = score
-                sorted_docs.append(doc)
+                sorted_docs.append(replace(doc, score=score))
 
             return {"documents": sorted_docs}
         except ClientError as client_error:

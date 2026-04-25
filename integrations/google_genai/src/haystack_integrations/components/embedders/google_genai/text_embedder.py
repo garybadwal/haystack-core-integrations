@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
 
 from google.genai import types
 from haystack import component, default_from_dict, default_to_dict, logging
@@ -27,7 +27,7 @@ class GoogleGenAITextEmbedder:
     from haystack_integrations.components.embedders.google_genai import GoogleGenAITextEmbedder
 
     # export the environment variable (GOOGLE_API_KEY or GEMINI_API_KEY)
-    text_embedder = GoogleGenAITextEmbedder(model="text-embedding-004")
+    text_embedder = GoogleGenAITextEmbedder(model="gemini-embedding-001")
 
     **2. Vertex AI (Application Default Credentials)**
     ```python
@@ -38,7 +38,7 @@ class GoogleGenAITextEmbedder:
         api="vertex",
         vertex_ai_project="my-project",
         vertex_ai_location="us-central1",
-        model="text-embedding-004"
+        model="gemini-embedding-001"
     )
     ```
 
@@ -49,7 +49,7 @@ class GoogleGenAITextEmbedder:
     # export the environment variable (GOOGLE_API_KEY or GEMINI_API_KEY)
     text_embedder = GoogleGenAITextEmbedder(
         api="vertex",
-        model="text-embedding-004"
+        model="gemini-embedding-001"
     )
     ```
 
@@ -66,7 +66,7 @@ class GoogleGenAITextEmbedder:
     print(text_embedder.run(text_to_embed))
 
     # {'embedding': [0.017020374536514282, -0.023255806416273117, ...],
-    # 'meta': {'model': 'text-embedding-004-v2',
+    # 'meta': {'model': 'gemini-embedding-001-v2',
     #          'usage': {'prompt_tokens': 4, 'total_tokens': 4}}}
     ```
     """
@@ -76,12 +76,12 @@ class GoogleGenAITextEmbedder:
         *,
         api_key: Secret = Secret.from_env_var(["GOOGLE_API_KEY", "GEMINI_API_KEY"], strict=False),
         api: Literal["gemini", "vertex"] = "gemini",
-        vertex_ai_project: Optional[str] = None,
-        vertex_ai_location: Optional[str] = None,
-        model: str = "text-embedding-004",
+        vertex_ai_project: str | None = None,
+        vertex_ai_location: str | None = None,
+        model: str = "gemini-embedding-001",
         prefix: str = "",
         suffix: str = "",
-        config: Optional[Dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         """
         Creates an GoogleGenAITextEmbedder component.
@@ -97,7 +97,7 @@ class GoogleGenAITextEmbedder:
             Required when using Vertex AI with Application Default Credentials.
         :param model:
             The name of the model to use for calculating embeddings.
-            The default model is `text-embedding-004`.
+            The default model is `gemini-embedding-001`.
         :param prefix:
             A string to add at the beginning of each text to embed.
         :param suffix:
@@ -123,7 +123,7 @@ class GoogleGenAITextEmbedder:
             vertex_ai_location=vertex_ai_location,
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -143,7 +143,7 @@ class GoogleGenAITextEmbedder:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "GoogleGenAITextEmbedder":
+    def from_dict(cls, data: dict[str, Any]) -> "GoogleGenAITextEmbedder":
         """
         Deserializes the component from a dictionary.
 
@@ -155,7 +155,7 @@ class GoogleGenAITextEmbedder:
         deserialize_secrets_inplace(data["init_parameters"], keys=["api_key"])
         return default_from_dict(cls, data)
 
-    def _prepare_input(self, text: str) -> Dict[str, Any]:
+    def _prepare_input(self, text: str) -> dict[str, Any]:
         if not isinstance(text, str):
             error_message_text = (
                 "GoogleGenAITextEmbedder expects a string as an input. "
@@ -166,18 +166,18 @@ class GoogleGenAITextEmbedder:
 
         text_to_embed = self._prefix + text + self._suffix
 
-        kwargs: Dict[str, Any] = {"model": self._model_name, "contents": text_to_embed}
+        kwargs: dict[str, Any] = {"model": self._model_name, "contents": text_to_embed}
         if self._config:
             kwargs["config"] = types.EmbedContentConfig(**self._config)
 
         return kwargs
 
-    def _prepare_output(self, result: types.EmbedContentResponse) -> Dict[str, Any]:
+    def _prepare_output(self, result: types.EmbedContentResponse) -> dict[str, Any]:
         embedding = result.embeddings[0].values if result.embeddings else []
         return {"embedding": embedding, "meta": {"model": self._model_name}}
 
-    @component.output_types(embedding=List[float], meta=Dict[str, Any])
-    def run(self, text: str) -> Union[Dict[str, List[float]], Dict[str, Any]]:
+    @component.output_types(embedding=list[float], meta=dict[str, Any])
+    def run(self, text: str) -> dict[str, list[float]] | dict[str, Any]:
         """
         Embeds a single string.
 
@@ -193,8 +193,8 @@ class GoogleGenAITextEmbedder:
         response = self._client.models.embed_content(**create_kwargs)
         return self._prepare_output(result=response)
 
-    @component.output_types(embedding=List[float], meta=Dict[str, Any])
-    async def run_async(self, text: str) -> Union[Dict[str, List[float]], Dict[str, Any]]:
+    @component.output_types(embedding=list[float], meta=dict[str, Any])
+    async def run_async(self, text: str) -> dict[str, list[float]] | dict[str, Any]:
         """
         Asynchronously embed a single string.
 

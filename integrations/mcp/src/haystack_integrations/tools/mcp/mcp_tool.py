@@ -4,6 +4,10 @@
 
 import asyncio
 import concurrent.futures
+import io
+import json
+import sys
+import tempfile
 import threading
 import warnings
 from abc import ABC, abstractmethod
@@ -59,6 +63,27 @@ def _resolve_headers(headers: dict[str, str | Secret] | None) -> dict[str, str] 
     return resolved_headers
 
 
+def _extract_first_text_element(tool_call_result: str) -> str | dict[str, Any]:
+    """
+    Return the first text content block from an MCP tool call result.
+
+    MCP tool call results may include mixed content types such as text, image, or
+    audio blocks. This helper extracts the first text block because the tool
+    invoker expects a single parsed payload rather than the full content list.
+    """
+    parsed: dict = json.loads(tool_call_result)
+    content: list = parsed.get("content", [])
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = block.get("text", "")
+            try:
+                return json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                return text
+    # No TextContent found, return full parsed response as fallback
+    return parsed
+
+
 class AsyncExecutor:
     """Thread-safe event loop executor for running async code from sync contexts."""
 
@@ -73,7 +98,7 @@ class AsyncExecutor:
                 cls._singleton_instance = cls()
             return cls._singleton_instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize a dedicated event loop"""
         self._loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
         self._thread: threading.Thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -83,7 +108,7 @@ class AsyncExecutor:
             message = "AsyncExecutor failed to start background event loop"
             raise RuntimeError(message)
 
-    def _run_loop(self):
+    def _run_loop(self) -> None:
         """Run the event loop"""
         asyncio.set_event_loop(self._loop)
         self._started.set()
@@ -106,7 +131,7 @@ class AsyncExecutor:
             message = f"Operation timed out after {timeout} seconds"
             raise TimeoutError(message) from e
 
-    def get_loop(self):
+    def get_loop(self) -> asyncio.AbstractEventLoop:
         """
         Get the event loop.
 
@@ -118,8 +143,7 @@ class AsyncExecutor:
         self, coro_factory: Callable[[asyncio.Event], Coroutine[Any, Any, Any]], timeout: float | None = None
     ) -> tuple[concurrent.futures.Future[Any], asyncio.Event]:
         """
-        Schedule `coro_factory` to run in the executor's event loop **without** blocking the
-        caller thread.
+        Schedule `coro_factory` to run in the executor's event loop **without** blocking the caller thread.
 
         The factory receives an :class:`asyncio.Event` that can be used to cooperatively shut
         the coroutine down. The method returns **both** the concurrent future (to observe
@@ -134,7 +158,7 @@ class AsyncExecutor:
         # correct loop and can safely be set from other threads via *call_soon_threadsafe*.
         stop_event_promise: Future[asyncio.Event] = Future()
 
-        async def _coroutine_with_stop_event():
+        async def _coroutine_with_stop_event() -> None:
             stop_event = asyncio.Event()
             stop_event_promise.set_result(stop_event)
             await coro_factory(stop_event)
@@ -154,7 +178,7 @@ class AsyncExecutor:
         :param timeout: Timeout in seconds for shutting down the event loop
         """
 
-        def _stop_loop():
+        def _stop_loop() -> None:
             self._loop.stop()
 
         asyncio.run_coroutine_threadsafe(asyncio.sleep(0), self._loop).result(timeout=timeout)
@@ -435,7 +459,17 @@ class StdioClient(MCPClient):
         logger.debug(f"PROCESS: Connecting to stdio server with command: {self.command}")
 
         server_params = StdioServerParameters(command=self.command, args=self.args, env=self.env)
-        stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
+
+        # In notebook environments, sys.stderr is a custom object without a real file descriptor, which causes MCP stdio
+        # connection to fail. We detect this and set the MCP server's errlog to a temp file instead.
+        errlog = sys.stderr
+        try:
+            sys.stderr.fileno()
+        except (io.UnsupportedOperation, AttributeError, OSError):
+            errlog = tempfile.NamedTemporaryFile(mode="w", suffix="-mcp-stderr.log", delete=False)
+            logger.warning("MCP server stderr redirected to {path}", path=errlog.name)
+
+        stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params, errlog=errlog))
         return await self._initialize_session_with_transport(stdio_transport, f"stdio server (command: {self.command})")
 
 
@@ -679,7 +713,7 @@ class SSEServerInfo(MCPServerInfo):
     base_delay: float = 1.0
     max_delay: float = 30.0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate that either url or base_url is provided."""
         if not self.url and not self.base_url:
             message = "Either url or base_url must be provided"
@@ -765,7 +799,7 @@ class StreamableHttpServerInfo(MCPServerInfo):
     base_delay: float = 1.0
     max_delay: float = 30.0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate the URL."""
         if not is_valid_http_url(self.url):
             message = f"Invalid url: {self.url}"
@@ -910,7 +944,7 @@ class MCPTool(Tool):
         outputs_to_string: dict[str, Any] | None = None,
         inputs_from_state: dict[str, str] | None = None,
         outputs_to_state: dict[str, dict[str, Any]] | None = None,
-    ):
+    ) -> None:
         """
         Initialize the MCP tool.
 
@@ -1048,19 +1082,20 @@ class MCPTool(Tool):
 
         return tool
 
-    def _invoke_tool(self, **kwargs: Any) -> str:
+    def _invoke_tool(self, **kwargs: Any) -> str | dict[str, Any]:
         """
         Synchronous tool invocation.
 
         :param kwargs: Arguments to pass to the tool
-        :returns: JSON string representation of the tool invocation result
+        :returns: JSON string or dictionary representation of the tool invocation result.
+                  Returns a dictionary when outputs_to_state is configured to enable state updates.
         """
         logger.debug(f"TOOL: Invoking tool '{self.name}' with args: {kwargs}")
         try:
             # Connect on first use if eager_connect is turned off
             self.warm_up()
 
-            async def invoke():
+            async def invoke() -> Any:
                 logger.debug(f"TOOL: Inside invoke coroutine for '{self.name}'")
                 client = cast(MCPClient, self._client)
                 result = await asyncio.wait_for(client.call_tool(self.name, kwargs), timeout=self._invocation_timeout)
@@ -1070,6 +1105,12 @@ class MCPTool(Tool):
             logger.debug(f"TOOL: About to run invoke for '{self.name}'")
             result = AsyncExecutor.get_instance().run(invoke(), timeout=self._invocation_timeout)
             logger.debug(f"TOOL: Invoke complete for '{self.name}', result type: {type(result)}")
+
+            # Parse JSON to dict only when outputs_to_state is configured.
+            # ToolInvoker requires dict for _merge_tool_outputs(); ToolCallResult.result expects str otherwise.
+            if self.outputs_to_state:
+                return _extract_first_text_element(result)
+
             return result
         except (MCPError, TimeoutError) as e:
             logger.debug(f"TOOL: Known error during invoke of '{self.name}': {e!s}")
@@ -1081,19 +1122,27 @@ class MCPTool(Tool):
             message = f"Failed to invoke tool '{self.name}' with args: {kwargs} , got error: {e!s}"
             raise MCPInvocationError(message, self.name, kwargs) from e
 
-    async def ainvoke(self, **kwargs: Any) -> str:
+    async def ainvoke(self, **kwargs: Any) -> str | dict[str, Any]:
         """
         Asynchronous tool invocation.
 
         :param kwargs: Arguments to pass to the tool
-        :returns: JSON string representation of the tool invocation result
+        :returns: JSON string or dictionary representation of the tool invocation result.
+                  Returns a dictionary when outputs_to_state is configured to enable state updates.
         :raises MCPInvocationError: If the tool invocation fails
         :raises TimeoutError: If the operation times out
         """
         try:
             self.warm_up()
             client = cast(MCPClient, self._client)
-            return await asyncio.wait_for(client.call_tool(self.name, kwargs), timeout=self._invocation_timeout)
+            result = await asyncio.wait_for(client.call_tool(self.name, kwargs), timeout=self._invocation_timeout)
+
+            # Parse JSON to dict only when outputs_to_state is configured.
+            # ToolInvoker requires dict for _merge_tool_outputs(); ToolCallResult.result expects str otherwise.
+            if self.outputs_to_state:
+                return _extract_first_text_element(result)
+
+            return result
         except asyncio.TimeoutError as e:
             message = f"Tool invocation timed out after {self._invocation_timeout} seconds"
             raise TimeoutError(message) from e
@@ -1103,6 +1152,30 @@ class MCPTool(Tool):
             message = f"Failed to invoke tool '{self.name}' with args: {kwargs} , got error: {e!s}"
             raise MCPInvocationError(message, self.name, kwargs) from e
 
+    def _get_valid_inputs(self) -> set[str]:
+        """
+        Return the set of valid input parameter names from the MCP tool schema.
+
+        Used to validate that `inputs_from_state` only references parameters that actually exist.
+        Unlike the default implementation that introspects the function signature,
+        this returns parameters from the MCP tool's JSON schema.
+
+        When eager_connect=False and we have placeholder parameters, returns an empty set
+        to skip validation until warm_up() is called.
+
+        :returns: Set of valid input parameter names from the MCP tool schema.
+        """
+        # Get parameters from the JSON schema (not from function introspection)
+        # MCPTool uses _invoke_tool(**kwargs) so introspection would only find 'kwargs'
+        properties = self.parameters.get("properties", {})
+
+        # If we have placeholder parameters (eager_connect=False), return empty set to skip validation
+        # Validation will happen during warm_up when real schema is fetched
+        if not properties:
+            return set()
+
+        return set(properties.keys())
+
     def warm_up(self) -> None:
         """Connect and fetch the tool schema if eager_connect is turned off."""
         with self._lock:
@@ -1110,6 +1183,19 @@ class MCPTool(Tool):
                 return
             tool = self._connect_and_initialize(self.name)
             self.parameters = tool.inputSchema
+
+            # Validate inputs_from_state now that we have the real schema
+            # Note: Duplicates Tool.__post_init__() logic, but needed here for early error detection
+            # when eager_connect=False (validation was skipped during __init__ via empty _get_valid_inputs())
+            if self._inputs_from_state:
+                valid_inputs = set(self.parameters.get("properties", {}).keys())
+                for state_key, param_name in self._inputs_from_state.items():
+                    if param_name not in valid_inputs:
+                        msg = (
+                            f"inputs_from_state maps '{state_key}' to unknown parameter '{param_name}'. "
+                            f"Valid parameters are: {valid_inputs}."
+                        )
+                        raise ValueError(msg)
 
             # Remove inputs_from_state keys from parameters schema if present
             # This matches the behavior of ComponentTool
@@ -1157,7 +1243,7 @@ class MCPTool(Tool):
 
         :param data: Dictionary containing serialized tool data
         :returns: A fully initialized MCPTool instance
-        :raises: Various exceptions if connection fails
+        :raises Exception: if connection fails
         """
         # Extract the tool parameters from the data dictionary
         inner_data = data["data"]
@@ -1193,7 +1279,7 @@ class MCPTool(Tool):
             outputs_to_state=outputs_to_state,
         )
 
-    def close(self):
+    def close(self) -> None:
         """Close the tool synchronously."""
         if hasattr(self, "_client") and self._client:
             try:
@@ -1203,7 +1289,7 @@ class MCPTool(Tool):
             except Exception as e:
                 logger.debug(f"TOOL: Error during synchronous worker stop: {e!s}")
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Cleanup resources when the tool is garbage collected."""
         logger.debug(f"TOOL: __del__ called for MCPTool '{self.name if hasattr(self, 'name') else 'unknown'}'")
 
@@ -1211,7 +1297,8 @@ class MCPTool(Tool):
 
 
 class _MCPClientSessionManager:
-    """Runs an MCPClient connect/close inside the AsyncExecutor's event loop.
+    """
+    Runs an MCPClient connect/close inside the AsyncExecutor's event loop.
 
     Life-cycle:
       1.  Create the worker to schedule a long-running coroutine in the
@@ -1228,7 +1315,7 @@ class _MCPClientSessionManager:
     # Maximum time to wait for worker shutdown in seconds
     WORKER_SHUTDOWN_TIMEOUT = 2.0
 
-    def __init__(self, client: "MCPClient", *, timeout: float | None = None):
+    def __init__(self, client: "MCPClient", *, timeout: float | None = None) -> None:
         self._client = client
         self.executor = AsyncExecutor.get_instance()
 

@@ -48,6 +48,9 @@ def document_store(request):
     # Override some methods to wait for the documents to be available
     original_write_documents = store.write_documents
     original_delete_documents = store.delete_documents
+    original_delete_all_documents = store.delete_all_documents
+    original_delete_by_filter = store.delete_by_filter
+    original_update_by_filter = store.update_by_filter
 
     def write_documents_and_wait(documents, policy=DuplicatePolicy.OVERWRITE):
         written_docs = original_write_documents(documents, policy)
@@ -57,6 +60,21 @@ def document_store(request):
     def delete_documents_and_wait(filters):
         original_delete_documents(filters)
         time.sleep(SLEEP_TIME_IN_SECONDS)
+
+    def delete_all_documents_and_wait():
+        original_delete_all_documents()
+        time.sleep(SLEEP_TIME_IN_SECONDS)
+
+    def delete_by_filter_and_wait(filters):
+        deleted_count = original_delete_by_filter(filters)
+        time.sleep(SLEEP_TIME_IN_SECONDS)
+        return deleted_count
+
+    def update_by_filter_and_wait(filters, meta=None, fields=None):
+        updates = meta if meta is not None else fields or {}
+        updated_count = original_update_by_filter(filters, updates)
+        time.sleep(SLEEP_TIME_IN_SECONDS)
+        return updated_count
 
     # Helper function to wait for the index to be deleted, needed to cover latency
     def wait_for_index_deletion(client, index_name):
@@ -69,6 +87,9 @@ def document_store(request):
 
     store.write_documents = write_documents_and_wait
     store.delete_documents = delete_documents_and_wait
+    store.delete_all_documents = delete_all_documents_and_wait
+    store.delete_by_filter = delete_by_filter_and_wait
+    store.update_by_filter = update_by_filter_and_wait
 
     yield store
     try:

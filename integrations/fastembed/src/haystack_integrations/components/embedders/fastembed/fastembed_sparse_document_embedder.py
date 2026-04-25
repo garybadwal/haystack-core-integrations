@@ -1,8 +1,16 @@
-from typing import Any, Dict, List, Optional
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from dataclasses import replace
+from typing import Any
 
 from haystack import Document, component, default_to_dict
 
-from .embedding_backend.fastembed_backend import _FastembedSparseEmbeddingBackendFactory
+from .embedding_backend.fastembed_backend import (
+    _FastembedSparseEmbeddingBackend,
+    _FastembedSparseEmbeddingBackendFactory,
+)
 
 
 @component
@@ -19,8 +27,6 @@ class FastembedSparseDocumentEmbedder:
         model="prithivida/Splade_PP_en_v1",
         batch_size=32,
     )
-
-    sparse_doc_embedder.warm_up()
 
     # Text taken from PubMed QA Dataset (https://huggingface.co/datasets/pubmed_qa)
     document_list = [
@@ -54,16 +60,16 @@ class FastembedSparseDocumentEmbedder:
     def __init__(
         self,
         model: str = "prithivida/Splade_PP_en_v1",
-        cache_dir: Optional[str] = None,
-        threads: Optional[int] = None,
+        cache_dir: str | None = None,
+        threads: int | None = None,
         batch_size: int = 32,
         progress_bar: bool = True,
-        parallel: Optional[int] = None,
+        parallel: int | None = None,
         local_files_only: bool = False,
-        meta_fields_to_embed: Optional[List[str]] = None,
+        meta_fields_to_embed: list[str] | None = None,
         embedding_separator: str = "\n",
-        model_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+        model_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """
         Create an FastembedDocumentEmbedder component.
 
@@ -95,10 +101,12 @@ class FastembedSparseDocumentEmbedder:
         self.meta_fields_to_embed = meta_fields_to_embed or []
         self.embedding_separator = embedding_separator
         self.model_kwargs = model_kwargs
+        self.embedding_backend: _FastembedSparseEmbeddingBackend | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
+
         :returns:
             Dictionary with serialized data.
         """
@@ -116,11 +124,11 @@ class FastembedSparseDocumentEmbedder:
             model_kwargs=self.model_kwargs,
         )
 
-    def warm_up(self):
+    def warm_up(self) -> None:
         """
         Initializes the component.
         """
-        if not hasattr(self, "embedding_backend"):
+        if self.embedding_backend is None:
             self.embedding_backend = _FastembedSparseEmbeddingBackendFactory.get_embedding_backend(
                 model_name=self.model_name,
                 cache_dir=self.cache_dir,
@@ -129,7 +137,7 @@ class FastembedSparseDocumentEmbedder:
                 model_kwargs=self.model_kwargs,
             )
 
-    def _prepare_texts_to_embed(self, documents: List[Document]) -> List[str]:
+    def _prepare_texts_to_embed(self, documents: list[Document]) -> list[str]:
         texts_to_embed = []
         for doc in documents:
             meta_values_to_embed = [
@@ -140,8 +148,8 @@ class FastembedSparseDocumentEmbedder:
             texts_to_embed.append(text_to_embed)
         return texts_to_embed
 
-    @component.output_types(documents=List[Document])
-    def run(self, documents: List[Document]) -> Dict[str, List[Document]]:
+    @component.output_types(documents=list[Document])
+    def run(self, documents: list[Document]) -> dict[str, list[Document]]:
         """
         Embeds a list of Documents.
 
@@ -149,6 +157,7 @@ class FastembedSparseDocumentEmbedder:
         :returns: A dictionary with the following keys:
             - `documents`: List of Documents with each Document's `sparse_embedding`
                             field set to the computed embeddings.
+        :raises TypeError: If the input is not a list of Documents.
         """
         if not isinstance(documents, list) or (documents and not isinstance(documents[0], Document)):
             msg = (
@@ -156,18 +165,20 @@ class FastembedSparseDocumentEmbedder:
                 "In case you want to embed a list of strings, please use the FastembedTextEmbedder."
             )
             raise TypeError(msg)
-        if not hasattr(self, "embedding_backend"):
-            msg = "The embedding model has not been loaded. Please call warm_up() before running."
-            raise RuntimeError(msg)
+
+        if self.embedding_backend is None:
+            self.warm_up()
 
         texts_to_embed = self._prepare_texts_to_embed(documents=documents)
-        embeddings = self.embedding_backend.embed(
+        embeddings = self.embedding_backend.embed(  # type: ignore[union-attr]
             texts_to_embed,
             batch_size=self.batch_size,
             progress_bar=self.progress_bar,
             parallel=self.parallel,
         )
 
-        for doc, emb in zip(documents, embeddings):
-            doc.sparse_embedding = emb
-        return {"documents": documents}
+        new_documents = []
+        for doc, emb in zip(documents, embeddings, strict=True):
+            new_documents.append(replace(doc, sparse_embedding=emb))
+
+        return {"documents": new_documents}

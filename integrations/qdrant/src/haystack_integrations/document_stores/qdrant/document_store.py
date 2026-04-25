@@ -1,6 +1,8 @@
 import inspect
+from collections.abc import AsyncGenerator, Generator
+from dataclasses import replace
 from itertools import islice
-from typing import Any, AsyncGenerator, ClassVar, Dict, Generator, List, Optional, Set, Tuple, Union
+from typing import Any, ClassVar, cast
 
 import qdrant_client
 from haystack import default_from_dict, default_to_dict, logging
@@ -9,8 +11,8 @@ from haystack.dataclasses.sparse_embedding import SparseEmbedding
 from haystack.document_stores.errors import DocumentStoreError, DuplicateDocumentError
 from haystack.document_stores.types import DuplicatePolicy
 from haystack.utils import Secret, deserialize_secrets_inplace
+from haystack.utils.misc import _normalize_metadata_field_name
 from numpy import exp
-from qdrant_client import grpc
 from qdrant_client.http import models as rest
 from qdrant_client.http.exceptions import UnexpectedResponse
 from tqdm import tqdm
@@ -37,10 +39,10 @@ class QdrantStoreError(DocumentStoreError):
     pass
 
 
-FilterType = Dict[str, Union[Dict[str, Any], List[Any], str, int, float, bool]]
+FilterType = dict[str, dict[str, Any] | list[Any] | str | int | float | bool]
 
 
-def get_batches_from_generator(iterable: List, n: int) -> Generator:
+def get_batches_from_generator(iterable: list, n: int) -> Generator:
     """
     Batch elements of an iterable into fixed-length chunks or blocks.
     """
@@ -53,8 +55,9 @@ def get_batches_from_generator(iterable: List, n: int) -> Generator:
 
 class QdrantDocumentStore:
     """
-    A QdrantDocumentStore implementation that you can use with any Qdrant instance: in-memory, disk-persisted,
-    Docker-based, and Qdrant Cloud Cluster deployments.
+    A QdrantDocumentStore implementation that you can use with any Qdrant instance.
+
+    Supports in-memory, disk-persisted, Docker-based, and Qdrant Cloud Cluster deployments.
 
     Usage example by creating an in-memory instance:
 
@@ -90,7 +93,7 @@ class QdrantDocumentStore:
     ```
     """
 
-    SIMILARITY: ClassVar[Dict[str, rest.Distance]] = {
+    SIMILARITY: ClassVar[dict[str, rest.Distance]] = {
         "cosine": rest.Distance.COSINE,
         "dot_product": rest.Distance.DOT,
         "l2": rest.Distance.EUCLID,
@@ -98,17 +101,17 @@ class QdrantDocumentStore:
 
     def __init__(
         self,
-        location: Optional[str] = None,
-        url: Optional[str] = None,
+        location: str | None = None,
+        url: str | None = None,
         port: int = 6333,
         grpc_port: int = 6334,
         prefer_grpc: bool = False,
-        https: Optional[bool] = None,
-        api_key: Optional[Secret] = None,
-        prefix: Optional[str] = None,
-        timeout: Optional[int] = None,
-        host: Optional[str] = None,
-        path: Optional[str] = None,
+        https: bool | None = None,
+        api_key: Secret | None = None,
+        prefix: str | None = None,
+        timeout: int | None = None,
+        host: str | None = None,
+        path: str | None = None,
         force_disable_check_same_thread: bool = False,
         index: str = "Document",
         embedding_dim: int = 768,
@@ -119,20 +122,19 @@ class QdrantDocumentStore:
         return_embedding: bool = False,
         progress_bar: bool = True,
         recreate_index: bool = False,
-        shard_number: Optional[int] = None,
-        replication_factor: Optional[int] = None,
-        write_consistency_factor: Optional[int] = None,
-        on_disk_payload: Optional[bool] = None,
-        hnsw_config: Optional[dict] = None,
-        optimizers_config: Optional[dict] = None,
-        wal_config: Optional[dict] = None,
-        quantization_config: Optional[dict] = None,
-        init_from: Optional[dict] = None,
+        shard_number: int | None = None,
+        replication_factor: int | None = None,
+        write_consistency_factor: int | None = None,
+        on_disk_payload: bool | None = None,
+        hnsw_config: dict | None = None,
+        optimizers_config: dict | None = None,
+        wal_config: dict | None = None,
+        quantization_config: dict | None = None,
         wait_result_from_api: bool = True,
-        metadata: Optional[dict] = None,
+        metadata: dict | None = None,
         write_batch_size: int = 100,
         scroll_size: int = 10_000,
-        payload_fields_to_index: Optional[List[dict]] = None,
+        payload_fields_to_index: list[dict] | None = None,
     ) -> None:
         """
         Initializes a QdrantDocumentStore.
@@ -209,8 +211,6 @@ class QdrantDocumentStore:
             Params for Write-Ahead-Log.
         :param quantization_config:
             Params for quantization. If `None`, quantization will be disabled.
-        :param init_from:
-            Use data stored in another collection to initialize this collection.
         :param wait_result_from_api:
             Whether to wait for the result from the API after each request.
         :param metadata:
@@ -223,8 +223,8 @@ class QdrantDocumentStore:
             List of payload fields to index.
         """
 
-        self._client: Optional[qdrant_client.QdrantClient] = None
-        self._async_client: Optional[qdrant_client.AsyncQdrantClient] = None
+        self._client: qdrant_client.QdrantClient | None = None
+        self._async_client: qdrant_client.AsyncQdrantClient | None = None
 
         # Store the Qdrant client specific attributes
         self.location = location
@@ -250,7 +250,6 @@ class QdrantDocumentStore:
         self.optimizers_config = optimizers_config
         self.wal_config = wal_config
         self.quantization_config = quantization_config
-        self.init_from = init_from
         self.wait_result_from_api = wait_result_from_api
         self.recreate_index = recreate_index
         self.payload_fields_to_index = payload_fields_to_index
@@ -338,8 +337,8 @@ class QdrantDocumentStore:
 
     def filter_documents(
         self,
-        filters: Optional[Union[Dict[str, Any], rest.Filter]] = None,
-    ) -> List[Document]:
+        filters: dict[str, Any] | rest.Filter | None = None,
+    ) -> list[Document]:
         """
         Returns the documents that match the provided filters.
 
@@ -361,8 +360,8 @@ class QdrantDocumentStore:
 
     async def filter_documents_async(
         self,
-        filters: Optional[Union[Dict[str, Any], rest.Filter]] = None,
-    ) -> List[Document]:
+        filters: dict[str, Any] | rest.Filter | None = None,
+    ) -> list[Document]:
         """
         Asynchronously returns the documents that match the provided filters.
         """
@@ -374,11 +373,12 @@ class QdrantDocumentStore:
 
     def write_documents(
         self,
-        documents: List[Document],
+        documents: list[Document],
         policy: DuplicatePolicy = DuplicatePolicy.FAIL,
     ) -> int:
         """
         Writes documents to Qdrant using the specified policy.
+
         The QdrantDocumentStore can handle duplicate documents based on the given policy.
         The available policies are:
         - `FAIL`: The operation will raise an error if any document already exists.
@@ -427,11 +427,12 @@ class QdrantDocumentStore:
 
     async def write_documents_async(
         self,
-        documents: List[Document],
+        documents: list[Document],
         policy: DuplicatePolicy = DuplicatePolicy.FAIL,
     ) -> int:
         """
         Asynchronously writes documents to Qdrant using the specified policy.
+
         The QdrantDocumentStore can handle duplicate documents based on the given policy.
         The available policies are:
         - `FAIL`: The operation will raise an error if any document already exists.
@@ -479,7 +480,7 @@ class QdrantDocumentStore:
                 progress_bar.update(self.write_batch_size)
         return len(document_objects)
 
-    def delete_documents(self, document_ids: List[str]) -> None:
+    def delete_documents(self, document_ids: list[str]) -> None:
         """
         Deletes documents that match the provided `document_ids` from the document store.
 
@@ -489,11 +490,10 @@ class QdrantDocumentStore:
         self._initialize_client()
         assert self._client is not None
 
-        ids = [convert_id(_id) for _id in document_ids]
         try:
             self._client.delete(
                 collection_name=self.index,
-                points_selector=ids,
+                points_selector=rest.PointIdsList(points=[convert_id(_id) for _id in document_ids]),
                 wait=self.wait_result_from_api,
             )
         except KeyError:
@@ -501,7 +501,7 @@ class QdrantDocumentStore:
                 "Called QdrantDocumentStore.delete_documents() on a non-existing ID",
             )
 
-    async def delete_documents_async(self, document_ids: List[str]) -> None:
+    async def delete_documents_async(self, document_ids: list[str]) -> None:
         """
         Asynchronously deletes documents that match the provided `document_ids` from the document store.
 
@@ -511,17 +511,373 @@ class QdrantDocumentStore:
         await self._initialize_async_client()
         assert self._async_client is not None
 
-        ids = [convert_id(_id) for _id in document_ids]
         try:
             await self._async_client.delete(
                 collection_name=self.index,
-                points_selector=ids,
+                points_selector=rest.PointIdsList(points=[convert_id(_id) for _id in document_ids]),
                 wait=self.wait_result_from_api,
             )
         except KeyError:
             logger.warning(
                 "Called QdrantDocumentStore.delete_documents_async() on a non-existing ID",
             )
+
+    def delete_by_filter(self, filters: dict[str, Any]) -> int:
+        """
+        Deletes all documents that match the provided filters.
+
+        :param filters: The filters to apply to select documents for deletion.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+
+        :returns:
+            The number of documents deleted.
+        """
+        self._initialize_client()
+        assert self._client is not None
+
+        try:
+            qdrant_filter = convert_filters_to_qdrant(filters)
+            if qdrant_filter is None:
+                return 0
+
+            count_response = self._client.count(
+                collection_name=self.index,
+                count_filter=qdrant_filter,
+            )
+            deleted_count = count_response.count
+
+            self._client.delete(
+                collection_name=self.index,
+                points_selector=rest.FilterSelector(filter=qdrant_filter),
+                wait=self.wait_result_from_api,
+            )
+            return deleted_count
+
+        except Exception as e:
+            msg = f"Failed to delete documents by filter from Qdrant: {e!s}"
+            raise QdrantStoreError(msg) from e
+
+    async def delete_by_filter_async(self, filters: dict[str, Any]) -> int:
+        """
+        Asynchronously deletes all documents that match the provided filters.
+
+        :param filters: The filters to apply to select documents for deletion.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+
+        :returns:
+            The number of documents deleted.
+        """
+        await self._initialize_async_client()
+        assert self._async_client is not None
+
+        try:
+            qdrant_filter = convert_filters_to_qdrant(filters)
+            if qdrant_filter is None:
+                return 0
+
+            count_response = await self._async_client.count(
+                collection_name=self.index,
+                count_filter=qdrant_filter,
+            )
+            deleted_count = count_response.count
+
+            await self._async_client.delete(
+                collection_name=self.index,
+                points_selector=rest.FilterSelector(filter=qdrant_filter),
+                wait=self.wait_result_from_api,
+            )
+            return deleted_count
+
+        except Exception as e:
+            msg = f"Failed to delete documents by filter from Qdrant: {e!s}"
+            raise QdrantStoreError(msg) from e
+
+    @staticmethod
+    def _check_stop_scrolling(next_offset: Any) -> bool:
+        """
+        Checks if scrolling should stop based on the next_offset value.
+
+        :param next_offset: The offset returned from the scroll operation.
+        :returns: True if scrolling should stop, False otherwise.
+        """
+        return next_offset is None or (
+            hasattr(next_offset, "num")
+            and hasattr(next_offset, "uuid")
+            and next_offset.num == 0
+            and next_offset.uuid == ""
+        )
+
+    @staticmethod
+    def _infer_type_from_value(value: Any) -> str:
+        """
+        Infers the type from a metadata value for get_metadata_fields_info.
+
+        Returns types matching OpenSearch format for consistency:
+        - 'keyword' for strings
+        - 'long' for integers
+        - 'float' for floats
+        - 'boolean' for booleans
+        """
+        if isinstance(value, bool):
+            return "boolean"
+        elif isinstance(value, int):
+            return "long"
+        elif isinstance(value, float):
+            return "float"
+        elif isinstance(value, str):
+            return "keyword"
+        else:
+            return "keyword"
+
+    @staticmethod
+    def _process_records_fields_info(records: list[Any], field_info: dict[str, dict[str, str]]) -> None:
+        """
+        Update field_info from a batch of Qdrant records.
+
+        Used by get_metadata_fields_info (sync/async). Extracts metadata from
+        payload["meta"] and infers types for each field.
+        """
+        for record in records:
+            if record.payload and "meta" in record.payload:
+                meta = record.payload["meta"]
+                for field_name, value in meta.items():
+                    if value is not None and field_name not in field_info:
+                        field_info[field_name] = {"type": QdrantDocumentStore._infer_type_from_value(value)}
+
+    @staticmethod
+    def _metadata_fields_info_from_schema(payload_schema: dict[str, Any]) -> dict[str, dict[str, str]]:
+        """
+        Build field name -> {type: ...} dict from Qdrant payload_schema.
+
+        Used when payload_schema has indexed metadata fields (e.g. meta.category).
+        Returns empty dict when schema has no metadata field info.
+        """
+        fields_info: dict[str, dict[str, str]] = {}
+        for field_name, field_config in payload_schema.items():
+            if field_name.startswith("meta."):
+                meta_field = field_name[5:]
+                if hasattr(field_config, "data_type"):
+                    qdrant_type = str(field_config.data_type).lower()
+                    fields_info[meta_field] = {"type": qdrant_type}
+                else:
+                    fields_info[meta_field] = {"type": "unknown"}
+        return fields_info
+
+    @staticmethod
+    def _process_records_min_max(
+        records: list[Any], metadata_field: str, min_value: Any, max_value: Any
+    ) -> tuple[Any, Any]:
+        """Update min/max from a batch of Qdrant records. Used by get_metadata_field_min_max (sync/async)."""
+        for record in records:
+            if record.payload and "meta" in record.payload:
+                meta = record.payload["meta"]
+                if metadata_field in meta:
+                    value = meta[metadata_field]
+                    if value is not None:
+                        if min_value is None or value < min_value:
+                            min_value = value
+                        if max_value is None or value > max_value:
+                            max_value = value
+        return min_value, max_value
+
+    @staticmethod
+    def _process_records_count_unique(
+        records: list[Any], metadata_fields: list[str], unique_values_by_field: dict[str, set[Any]]
+    ) -> None:
+        """
+        Update unique_values_by_field from a batch of Qdrant records.
+
+        Used by count_unique_metadata_by_filter (sync/async).
+        """
+        for record in records:
+            if record.payload and "meta" in record.payload:
+                meta = record.payload["meta"]
+                for field in metadata_fields:
+                    if field in meta:
+                        value = meta[field]
+                        if value is not None:
+                            if isinstance(value, (list, dict)):
+                                unique_values_by_field[field].add(str(value))
+                            else:
+                                unique_values_by_field[field].add(value)
+
+    @staticmethod
+    def _process_records_unique_values(
+        records: list[Any],
+        metadata_field: str,
+        unique_values: list[Any],
+        unique_values_set: set[Any],
+        offset: int,
+        limit: int,
+    ) -> bool:
+        """Collect unique values from a batch of records. Returns True when len(unique_values) >= offset + limit."""
+        for record in records:
+            if record.payload and "meta" in record.payload:
+                meta = record.payload["meta"]
+                if metadata_field in meta:
+                    value = meta[metadata_field]
+                    if value is not None:
+                        hashable_value = str(value) if isinstance(value, (list, dict)) else value
+                        if hashable_value not in unique_values_set:
+                            unique_values_set.add(hashable_value)
+                            unique_values.append(value)
+                            if len(unique_values) >= offset + limit:
+                                return True
+        return False
+
+    @staticmethod
+    def _create_updated_point_from_record(record: Any, meta: dict[str, Any]) -> rest.PointStruct:
+        """
+        Creates an updated PointStruct from a Qdrant record with merged metadata.
+
+        :param record: The Qdrant record to update.
+        :param meta: The metadata fields to merge with existing metadata.
+        :returns: A PointStruct with updated metadata and preserved vectors.
+        """
+        # merge existing payload with new metadata
+        # Metadata is stored under the "meta" key in the payload
+        updated_payload = dict(record.payload or {})
+        if "meta" not in updated_payload:
+            updated_payload["meta"] = {}
+        updated_payload["meta"].update(meta)
+
+        # create updated point preserving vectors
+        # Type cast needed because record.vector type doesn't include all PointStruct vector types
+        vector_value = record.vector if record.vector is not None else {}
+        return rest.PointStruct(
+            id=record.id,
+            vector=cast(Any, vector_value),
+            payload=updated_payload,
+        )
+
+    def update_by_filter(self, filters: dict[str, Any], meta: dict[str, Any]) -> int:
+        """
+        Updates the metadata of all documents that match the provided filters.
+
+        **Note**: This operation is not atomic. Documents matching the filter are fetched first,
+        then updated. If documents are modified between the fetch and update operations,
+        those changes may be lost.
+
+        :param filters: The filters to apply to select documents for updating.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :param meta: The metadata fields to update. This will be merged with existing metadata.
+
+        :returns:
+            The number of documents updated.
+        """
+        self._initialize_client()
+        assert self._client is not None
+
+        try:
+            qdrant_filter = convert_filters_to_qdrant(filters)
+            if qdrant_filter is None:
+                return 0
+
+            # get all matching documents using scroll
+            updated_points = []
+            next_offset = None
+
+            while True:
+                records, next_offset = self._client.scroll(
+                    collection_name=self.index,
+                    scroll_filter=qdrant_filter,
+                    limit=self.scroll_size,
+                    offset=next_offset,
+                    with_payload=True,
+                    with_vectors=True,
+                )
+
+                # update payload for each record
+                for record in records:
+                    updated_points.append(self._create_updated_point_from_record(record, meta))
+
+                if self._check_stop_scrolling(next_offset):
+                    break
+
+            if not updated_points:
+                return 0
+
+            # upsert updated points back in batches
+            for batch in get_batches_from_generator(updated_points, self.write_batch_size):
+                self._client.upsert(
+                    collection_name=self.index,
+                    points=list(batch),
+                    wait=self.wait_result_from_api,
+                )
+
+            logger.info(
+                "Updated {n_docs} documents in collection '{name}' using filters.",
+                n_docs=len(updated_points),
+                name=self.index,
+            )
+            return len(updated_points)
+        except Exception as e:
+            msg = f"Failed to update documents by filter in Qdrant: {e!s}"
+            raise QdrantStoreError(msg) from e
+
+    async def update_by_filter_async(self, filters: dict[str, Any], meta: dict[str, Any]) -> int:
+        """
+        Asynchronously updates the metadata of all documents that match the provided filters.
+
+        **Note**: This operation is not atomic. Documents matching the filter are fetched first,
+        then updated. If documents are modified between the fetch and update operations,
+        those changes may be lost.
+
+        :param filters: The filters to apply to select documents for updating.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :param meta: The metadata fields to update. This will be merged with existing metadata.
+
+        :returns:
+            The number of documents updated.
+        """
+        await self._initialize_async_client()
+        assert self._async_client is not None
+
+        try:
+            qdrant_filter = convert_filters_to_qdrant(filters)
+            if qdrant_filter is None:
+                return 0
+
+            updated_points = []
+            next_offset = None
+
+            while True:
+                records, next_offset = await self._async_client.scroll(
+                    collection_name=self.index,
+                    scroll_filter=qdrant_filter,
+                    limit=self.scroll_size,
+                    offset=next_offset,
+                    with_payload=True,
+                    with_vectors=True,
+                )
+
+                # update payload for each record
+                for record in records:
+                    updated_points.append(self._create_updated_point_from_record(record, meta))
+
+                if self._check_stop_scrolling(next_offset):
+                    break
+
+            if not updated_points:
+                return 0
+
+            # upsert updated points back in batches
+            for batch in get_batches_from_generator(updated_points, self.write_batch_size):
+                await self._async_client.upsert(
+                    collection_name=self.index,
+                    points=list(batch),
+                    wait=self.wait_result_from_api,
+                )
+
+            logger.info(
+                "Updated {n_docs} documents in collection '{name}' using filters.",
+                n_docs=len(updated_points),
+                name=self.index,
+            )
+            return len(updated_points)
+        except Exception as e:
+            msg = f"Failed to update documents by filter in Qdrant: {e!s}"
+            raise QdrantStoreError(msg) from e
 
     def delete_all_documents(self, recreate_index: bool = False) -> None:
         """
@@ -625,8 +981,383 @@ class QdrantDocumentStore:
                     f"Error {e} when calling QdrantDocumentStore.delete_all_documents_async()",
                 )
 
+    def count_documents_by_filter(self, filters: dict[str, Any]) -> int:
+        """
+        Returns the number of documents that match the provided filters.
+
+        :param filters: The filters to apply to count documents.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+
+        :returns: The number of documents that match the filters.
+        """
+        self._initialize_client()
+        assert self._client is not None
+
+        qdrant_filter = convert_filters_to_qdrant(filters)
+        try:
+            response = self._client.count(
+                collection_name=self.index,
+                count_filter=qdrant_filter,
+            )
+            return response.count
+        except (UnexpectedResponse, ValueError) as e:
+            logger.warning(f"Error {e} when calling QdrantDocumentStore.count_documents_by_filter()")
+            return 0
+
+    async def count_documents_by_filter_async(self, filters: dict[str, Any]) -> int:
+        """
+        Asynchronously returns the number of documents that match the provided filters.
+
+        :param filters: The filters to apply to select documents for counting.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+
+        :returns:
+            The number of documents that match the filters.
+        """
+        await self._initialize_async_client()
+        assert self._async_client is not None
+
+        qdrant_filter = convert_filters_to_qdrant(filters)
+        try:
+            response = await self._async_client.count(
+                collection_name=self.index,
+                count_filter=qdrant_filter,
+            )
+            return response.count
+        except (UnexpectedResponse, ValueError) as e:
+            logger.warning(f"Error {e} when calling QdrantDocumentStore.count_documents_by_filter_async()")
+            return 0
+
+    def get_metadata_fields_info(self) -> dict[str, dict[str, str]]:
+        """
+        Returns the information about the metadata fields in the collection.
+
+        Since Qdrant may not have a payload schema for unindexed metadata,
+        this method scrolls through documents to infer field types from
+        payload["meta"].
+
+        :returns:
+            A dictionary mapping field names to their type information e.g.:
+            ```python
+            {"category": {"type": "keyword"}, "priority": {"type": "long"}}
+            ```
+        """
+        self._initialize_client()
+        assert self._client is not None
+
+        try:
+            collection_info = self._client.get_collection(self.index)
+            payload_schema = collection_info.payload_schema or {}
+            fields_info = self._metadata_fields_info_from_schema(payload_schema)
+
+            if not fields_info:
+                next_offset = None
+                while True:
+                    records, next_offset = self._client.scroll(
+                        collection_name=self.index,
+                        scroll_filter=None,
+                        limit=self.scroll_size,
+                        offset=next_offset,
+                        with_payload=True,
+                        with_vectors=False,
+                    )
+                    self._process_records_fields_info(records, fields_info)
+                    if self._check_stop_scrolling(next_offset):
+                        break
+
+            return fields_info
+        except (UnexpectedResponse, ValueError) as e:
+            logger.warning(f"Error {e} when calling QdrantDocumentStore.get_metadata_fields_info()")
+            return {}
+
+    async def get_metadata_fields_info_async(self) -> dict[str, dict[str, str]]:
+        """
+        Asynchronously returns the information about the metadata fields in the collection.
+
+        Since Qdrant may not have a payload schema for unindexed metadata,
+        this method scrolls through documents to infer field types from
+        payload["meta"].
+
+        :returns:
+            A dictionary mapping field names to their type information e.g.:
+            ```python
+            {"category": {"type": "keyword"}, "priority": {"type": "long"}}
+            ```
+        """
+        await self._initialize_async_client()
+        assert self._async_client is not None
+
+        try:
+            collection_info = await self._async_client.get_collection(self.index)
+            payload_schema = collection_info.payload_schema or {}
+            fields_info = self._metadata_fields_info_from_schema(payload_schema)
+
+            if not fields_info:
+                next_offset = None
+                while True:
+                    records, next_offset = await self._async_client.scroll(
+                        collection_name=self.index,
+                        scroll_filter=None,
+                        limit=self.scroll_size,
+                        offset=next_offset,
+                        with_payload=True,
+                        with_vectors=False,
+                    )
+                    self._process_records_fields_info(records, fields_info)
+                    if self._check_stop_scrolling(next_offset):
+                        break
+
+            return fields_info
+        except (UnexpectedResponse, ValueError) as e:
+            logger.warning(f"Error {e} when calling QdrantDocumentStore.get_metadata_fields_info_async()")
+            return {}
+
+    def get_metadata_field_min_max(self, metadata_field: str) -> dict[str, Any]:
+        """
+        Returns the minimum and maximum values for the given metadata field.
+
+        :param metadata_field: The metadata field key (inside ``meta``) to get the minimum and maximum values for.
+
+        :returns: A dictionary with the keys "min" and "max", where each value is the minimum or maximum value of the
+                  metadata field across all documents. Returns ``{"min": None, "max": None}`` if no documents have
+                  the field.
+        """
+        self._initialize_client()
+        assert self._client is not None
+
+        field_name = _normalize_metadata_field_name(metadata_field)
+        try:
+            min_value: Any = None
+            max_value: Any = None
+            next_offset = None
+
+            while True:
+                records, next_offset = self._client.scroll(
+                    collection_name=self.index,
+                    scroll_filter=None,
+                    limit=self.scroll_size,
+                    offset=next_offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                min_value, max_value = self._process_records_min_max(records, field_name, min_value, max_value)
+                if self._check_stop_scrolling(next_offset):
+                    break
+
+            return {"min": min_value, "max": max_value}
+        except Exception as e:
+            logger.warning(f"Error {e} when calling QdrantDocumentStore.get_metadata_field_min_max()")
+            return {}
+
+    async def get_metadata_field_min_max_async(self, metadata_field: str) -> dict[str, Any]:
+        """
+        Asynchronously returns the minimum and maximum values for the given metadata field.
+
+        :param metadata_field: The metadata field key (inside ``meta``) to get the minimum and maximum values for.
+
+        :returns: A dictionary with the keys "min" and "max", where each value is the minimum or maximum value of the
+                  metadata field across all documents. Returns ``{"min": None, "max": None}`` if no documents have
+                  the field.
+        """
+        await self._initialize_async_client()
+        assert self._async_client is not None
+
+        field_name = _normalize_metadata_field_name(metadata_field)
+        try:
+            min_value: Any = None
+            max_value: Any = None
+            next_offset = None
+
+            while True:
+                records, next_offset = await self._async_client.scroll(
+                    collection_name=self.index,
+                    scroll_filter=None,
+                    limit=self.scroll_size,
+                    offset=next_offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                min_value, max_value = self._process_records_min_max(records, field_name, min_value, max_value)
+                if self._check_stop_scrolling(next_offset):
+                    break
+
+            return {"min": min_value, "max": max_value}
+        except Exception as e:
+            logger.warning(f"Error {e} when calling QdrantDocumentStore.get_metadata_field_min_max_async()")
+            return {}
+
+    def count_unique_metadata_by_filter(self, filters: dict[str, Any], metadata_fields: list[str]) -> dict[str, int]:
+        """
+        Returns the number of unique values for each specified metadata field among documents that match the filters.
+
+        :param filters: The filters to restrict the documents considered.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :param metadata_fields: List of metadata field keys (inside ``meta``) to count unique values for.
+
+        :returns: A dictionary mapping each metadata field name to the count of its unique values among the filtered
+                  documents.
+        """
+        self._initialize_client()
+        assert self._client is not None
+
+        qdrant_filter = convert_filters_to_qdrant(filters) if filters else None
+        unique_values_by_field: dict[str, set[Any]] = {field: set() for field in metadata_fields}
+
+        try:
+            next_offset = None
+            while True:
+                records, next_offset = self._client.scroll(
+                    collection_name=self.index,
+                    scroll_filter=qdrant_filter,
+                    limit=self.scroll_size,
+                    offset=next_offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                self._process_records_count_unique(records, metadata_fields, unique_values_by_field)
+                if self._check_stop_scrolling(next_offset):
+                    break
+
+            return {field: len(unique_values_by_field[field]) for field in metadata_fields}
+        except Exception as e:
+            logger.warning(f"Error {e} when calling QdrantDocumentStore.count_unique_metadata_by_filter()")
+            return dict.fromkeys(metadata_fields, 0)
+
+    async def count_unique_metadata_by_filter_async(
+        self, filters: dict[str, Any], metadata_fields: list[str]
+    ) -> dict[str, int]:
+        """
+        Asynchronously returns the number of unique values for each specified metadata field among documents.
+
+        Only documents that match the filters are considered.
+
+        :param filters: The filters to restrict the documents considered.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :param metadata_fields: List of metadata field keys (inside ``meta``) to count unique values for.
+
+        :returns: A dictionary mapping each metadata field name to the count of its unique values among the filtered
+                  documents.
+        """
+        await self._initialize_async_client()
+        assert self._async_client is not None
+
+        qdrant_filter = convert_filters_to_qdrant(filters) if filters else None
+        unique_values_by_field: dict[str, set[Any]] = {field: set() for field in metadata_fields}
+
+        try:
+            next_offset = None
+            while True:
+                records, next_offset = await self._async_client.scroll(
+                    collection_name=self.index,
+                    scroll_filter=qdrant_filter,
+                    limit=self.scroll_size,
+                    offset=next_offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                self._process_records_count_unique(records, metadata_fields, unique_values_by_field)
+                if self._check_stop_scrolling(next_offset):
+                    break
+
+            return {field: len(unique_values_by_field[field]) for field in metadata_fields}
+        except Exception as e:
+            logger.warning(f"Error {e} when calling QdrantDocumentStore.count_unique_metadata_by_filter_async()")
+            return dict.fromkeys(metadata_fields, 0)
+
+    def get_metadata_field_unique_values(
+        self, metadata_field: str, filters: dict[str, Any] | None = None, limit: int = 100, offset: int = 0
+    ) -> list[Any]:
+        """
+        Returns unique values for a metadata field, with optional filters and offset/limit pagination.
+
+        Unique values are ordered by first occurrence during scroll. Pagination is offset-based over that order.
+
+        :param metadata_field: The metadata field key (inside ``meta``) to get unique values for.
+        :param filters: Optional filters to restrict the documents considered.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :param limit: Maximum number of unique values to return per page. Defaults to 100.
+        :param offset: Number of unique values to skip (for pagination). Defaults to 0.
+
+        :returns: A list of unique values for the field (at most ``limit`` items, starting at ``offset``).
+        """
+        self._initialize_client()
+        assert self._client is not None
+
+        qdrant_filter = convert_filters_to_qdrant(filters) if filters else None
+        unique_values: list[Any] = []
+        unique_values_set: set[Any] = set()
+
+        try:
+            next_offset = None
+            while len(unique_values) < offset + limit:
+                records, next_offset = self._client.scroll(
+                    collection_name=self.index,
+                    scroll_filter=qdrant_filter,
+                    limit=self.scroll_size,
+                    offset=next_offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                if self._process_records_unique_values(
+                    records, metadata_field, unique_values, unique_values_set, offset, limit
+                ):
+                    break
+                if self._check_stop_scrolling(next_offset):
+                    break
+
+            return unique_values[offset : offset + limit]
+        except Exception as e:
+            logger.warning(f"Error {e} when calling QdrantDocumentStore.get_metadata_field_unique_values()")
+            return []
+
+    async def get_metadata_field_unique_values_async(
+        self, metadata_field: str, filters: dict[str, Any] | None = None, limit: int = 100, offset: int = 0
+    ) -> list[Any]:
+        """
+        Asynchronously returns unique values for a metadata field, with optional filters and offset/limit pagination.
+
+        Unique values are ordered by first occurrence during scroll. Pagination is offset-based over that order.
+
+        :param metadata_field: The metadata field key (inside ``meta``) to get unique values for.
+        :param filters: Optional filters to restrict the documents considered.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :param limit: Maximum number of unique values to return per page. Defaults to 100.
+        :param offset: Number of unique values to skip (for pagination). Defaults to 0.
+
+        :returns: A list of unique values for the field (at most ``limit`` items, starting at ``offset``).
+        """
+        await self._initialize_async_client()
+        assert self._async_client is not None
+
+        qdrant_filter = convert_filters_to_qdrant(filters) if filters else None
+        unique_values: list[Any] = []
+        unique_values_set: set[Any] = set()
+
+        try:
+            next_offset = None
+            while len(unique_values) < offset + limit:
+                records, next_offset = await self._async_client.scroll(
+                    collection_name=self.index,
+                    scroll_filter=qdrant_filter,
+                    limit=self.scroll_size,
+                    offset=next_offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                if self._process_records_unique_values(
+                    records, metadata_field, unique_values, unique_values_set, offset, limit
+                ):
+                    break
+                if self._check_stop_scrolling(next_offset):
+                    break
+
+            return unique_values[offset : offset + limit]
+        except Exception as e:
+            logger.warning(f"Error {e} when calling QdrantDocumentStore.get_metadata_field_unique_values_async()")
+            return []
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "QdrantDocumentStore":
+    def from_dict(cls, data: dict[str, Any]) -> "QdrantDocumentStore":
         """
         Deserializes the component from a dictionary.
 
@@ -638,7 +1369,7 @@ class QdrantDocumentStore:
         deserialize_secrets_inplace(data["init_parameters"], keys=["api_key"])
         return default_from_dict(cls, data)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -657,7 +1388,7 @@ class QdrantDocumentStore:
 
     def _get_documents_generator(
         self,
-        filters: Optional[Union[Dict[str, Any], rest.Filter]] = None,
+        filters: dict[str, Any] | rest.Filter | None = None,
     ) -> Generator[Document, None, None]:
         """
         Returns a generator that yields documents from Qdrant based on the provided filters.
@@ -684,8 +1415,11 @@ class QdrantDocumentStore:
                 with_vectors=True,
             )
             stop_scrolling = next_offset is None or (
-                isinstance(next_offset, grpc.PointId) and next_offset.num == 0 and next_offset.uuid == ""  # type: ignore[union-attr]
-            )  # grpc.PointId always has num and uuid
+                hasattr(next_offset, "num")
+                and hasattr(next_offset, "uuid")
+                and next_offset.num == 0
+                and next_offset.uuid == ""
+            )  # PointId always has num and uuid
 
             for record in records:
                 yield convert_qdrant_point_to_haystack_document(
@@ -694,7 +1428,7 @@ class QdrantDocumentStore:
 
     async def _get_documents_generator_async(
         self,
-        filters: Optional[Union[Dict[str, Any], rest.Filter]] = None,
+        filters: dict[str, Any] | rest.Filter | None = None,
     ) -> AsyncGenerator[Document, None]:
         """
         Returns an asynchronous generator that yields documents from Qdrant based on the provided filters.
@@ -721,8 +1455,11 @@ class QdrantDocumentStore:
                 with_vectors=True,
             )
             stop_scrolling = next_offset is None or (
-                isinstance(next_offset, grpc.PointId) and next_offset.num == 0 and next_offset.uuid == ""  # type: ignore[union-attr]
-            )  # grpc.PointId always has num and uuid
+                hasattr(next_offset, "num")
+                and hasattr(next_offset, "uuid")
+                and next_offset.num == 0
+                and next_offset.uuid == ""
+            )  # PointId always has num and uuid
 
             for record in records:
                 yield convert_qdrant_point_to_haystack_document(
@@ -731,8 +1468,8 @@ class QdrantDocumentStore:
 
     def get_documents_by_id(
         self,
-        ids: List[str],
-    ) -> List[Document]:
+        ids: list[str],
+    ) -> list[Document]:
         """
         Retrieves documents from Qdrant by their IDs.
 
@@ -741,7 +1478,7 @@ class QdrantDocumentStore:
         :returns:
             A list of documents.
         """
-        documents: List[Document] = []
+        documents: list[Document] = []
 
         self._initialize_client()
         assert self._client is not None
@@ -762,8 +1499,8 @@ class QdrantDocumentStore:
 
     async def get_documents_by_id_async(
         self,
-        ids: List[str],
-    ) -> List[Document]:
+        ids: list[str],
+    ) -> list[Document]:
         """
         Retrieves documents from Qdrant by their IDs.
 
@@ -772,7 +1509,7 @@ class QdrantDocumentStore:
         :returns:
             A list of documents.
         """
-        documents: List[Document] = []
+        documents: list[Document] = []
 
         await self._initialize_async_client()
         assert self._async_client is not None
@@ -794,14 +1531,14 @@ class QdrantDocumentStore:
     def _query_by_sparse(
         self,
         query_sparse_embedding: SparseEmbedding,
-        filters: Optional[Union[Dict[str, Any], rest.Filter]] = None,
+        filters: dict[str, Any] | rest.Filter | None = None,
         top_k: int = 10,
         scale_score: bool = False,
         return_embedding: bool = False,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
-    ) -> List[Document]:
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
+    ) -> list[Document]:
         """
         Queries Qdrant using a sparse embedding and returns the most relevant documents.
 
@@ -870,15 +1607,15 @@ class QdrantDocumentStore:
 
     def _query_by_embedding(
         self,
-        query_embedding: List[float],
-        filters: Optional[Union[Dict[str, Any], rest.Filter]] = None,
+        query_embedding: list[float],
+        filters: dict[str, Any] | rest.Filter | None = None,
         top_k: int = 10,
         scale_score: bool = False,
         return_embedding: bool = False,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
-    ) -> List[Document]:
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
+    ) -> list[Document]:
         """
         Queries Qdrant using a dense embedding and returns the most relevant documents.
 
@@ -930,15 +1667,15 @@ class QdrantDocumentStore:
 
     def _query_hybrid(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         query_sparse_embedding: SparseEmbedding,
-        filters: Optional[Union[Dict[str, Any], rest.Filter]] = None,
+        filters: dict[str, Any] | rest.Filter | None = None,
         top_k: int = 10,
         return_embedding: bool = False,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
-    ) -> List[Document]:
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
+    ) -> list[Document]:
         """
         Retrieves documents based on dense and sparse embeddings and fuses the results using Reciprocal Rank Fusion.
 
@@ -1044,14 +1781,14 @@ class QdrantDocumentStore:
     async def _query_by_sparse_async(
         self,
         query_sparse_embedding: SparseEmbedding,
-        filters: Optional[Union[Dict[str, Any], rest.Filter]] = None,
+        filters: dict[str, Any] | rest.Filter | None = None,
         top_k: int = 10,
         scale_score: bool = False,
         return_embedding: bool = False,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
-    ) -> List[Document]:
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
+    ) -> list[Document]:
         """
         Asynchronously queries Qdrant using a sparse embedding and returns the most relevant documents.
 
@@ -1123,15 +1860,15 @@ class QdrantDocumentStore:
 
     async def _query_by_embedding_async(
         self,
-        query_embedding: List[float],
-        filters: Optional[Union[Dict[str, Any], rest.Filter]] = None,
+        query_embedding: list[float],
+        filters: dict[str, Any] | rest.Filter | None = None,
         top_k: int = 10,
         scale_score: bool = False,
         return_embedding: bool = False,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
-    ) -> List[Document]:
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
+    ) -> list[Document]:
         """
         Asynchronously queries Qdrant using a dense embedding and returns the most relevant documents.
 
@@ -1184,18 +1921,19 @@ class QdrantDocumentStore:
 
     async def _query_hybrid_async(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         query_sparse_embedding: SparseEmbedding,
-        filters: Optional[Union[Dict[str, Any], rest.Filter]] = None,
+        filters: dict[str, Any] | rest.Filter | None = None,
         top_k: int = 10,
         return_embedding: bool = False,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
-    ) -> List[Document]:
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
+    ) -> list[Document]:
         """
-        Asynchronously retrieves documents based on dense and sparse embeddings and fuses
-        the results using Reciprocal Rank Fusion.
+        Asynchronously retrieves documents based on dense and sparse embeddings.
+
+        Fuses the results using Reciprocal Rank Fusion.
 
         This method is not part of the public interface of `QdrantDocumentStore` and shouldn't be used directly.
         Use the `QdrantHybridRetriever` instead.
@@ -1316,7 +2054,7 @@ class QdrantDocumentStore:
             )
             raise QdrantStoreError(msg) from ke
 
-    def _create_payload_index(self, collection_name: str, payload_fields_to_index: Optional[List[dict]] = None) -> None:
+    def _create_payload_index(self, collection_name: str, payload_fields_to_index: list[dict] | None = None) -> None:
         """
         Create payload index for the collection if payload_fields_to_index is provided.
 
@@ -1335,7 +2073,7 @@ class QdrantDocumentStore:
                 )
 
     async def _create_payload_index_async(
-        self, collection_name: str, payload_fields_to_index: Optional[List[dict]] = None
+        self, collection_name: str, payload_fields_to_index: list[dict] | None = None
     ) -> None:
         """
         Asynchronously create payload index for the collection if payload_fields_to_index is provided.
@@ -1363,7 +2101,7 @@ class QdrantDocumentStore:
         use_sparse_embeddings: bool,
         sparse_idf: bool,
         on_disk: bool = False,
-        payload_fields_to_index: Optional[List[dict]] = None,
+        payload_fields_to_index: list[dict] | None = None,
     ) -> None:
         """
         Sets up the Qdrant collection with the specified parameters.
@@ -1420,7 +2158,7 @@ class QdrantDocumentStore:
         use_sparse_embeddings: bool,
         sparse_idf: bool,
         on_disk: bool = False,
-        payload_fields_to_index: Optional[List[dict]] = None,
+        payload_fields_to_index: list[dict] | None = None,
     ) -> None:
         """
         Asynchronously sets up the Qdrant collection with the specified parameters.
@@ -1473,8 +2211,8 @@ class QdrantDocumentStore:
         collection_name: str,
         distance: rest.Distance,
         embedding_dim: int,
-        on_disk: Optional[bool] = None,
-        use_sparse_embeddings: Optional[bool] = None,
+        on_disk: bool | None = None,
+        use_sparse_embeddings: bool | None = None,
         sparse_idf: bool = False,
     ) -> None:
         """
@@ -1516,8 +2254,8 @@ class QdrantDocumentStore:
         collection_name: str,
         distance: rest.Distance,
         embedding_dim: int,
-        on_disk: Optional[bool] = None,
-        use_sparse_embeddings: Optional[bool] = None,
+        on_disk: bool | None = None,
+        use_sparse_embeddings: bool | None = None,
         sparse_idf: bool = False,
     ) -> None:
         """
@@ -1556,12 +2294,13 @@ class QdrantDocumentStore:
 
     def _handle_duplicate_documents(
         self,
-        documents: List[Document],
-        policy: Optional[DuplicatePolicy] = None,
-    ) -> List[Document]:
+        documents: list[Document],
+        policy: DuplicatePolicy | None = None,
+    ) -> list[Document]:
         """
-        Checks whether any of the passed documents is already existing in the chosen index and returns a list of
-        documents that are not in the index yet.
+        Checks whether any of the passed documents is already existing in the chosen index.
+
+        Returns a list of documents that are not in the index yet.
 
         :param documents: A list of Haystack Document objects.
         :param policy: The duplicate policy to use when writing documents.
@@ -1571,7 +2310,7 @@ class QdrantDocumentStore:
         if policy in (DuplicatePolicy.SKIP, DuplicatePolicy.FAIL):
             documents = self._drop_duplicate_documents(documents)
             documents_found = self.get_documents_by_id(ids=[doc.id for doc in documents])
-            ids_exist_in_db: List[str] = [doc.id for doc in documents_found]
+            ids_exist_in_db: list[str] = [doc.id for doc in documents_found]
 
             if len(ids_exist_in_db) > 0 and policy == DuplicatePolicy.FAIL:
                 msg = f"Document with ids '{', '.join(ids_exist_in_db)} already exists in index = '{self.index}'."
@@ -1583,13 +2322,13 @@ class QdrantDocumentStore:
 
     async def _handle_duplicate_documents_async(
         self,
-        documents: List[Document],
-        policy: Optional[DuplicatePolicy] = None,
-    ) -> List[Document]:
+        documents: list[Document],
+        policy: DuplicatePolicy | None = None,
+    ) -> list[Document]:
         """
-        Asynchronously checks whether any of the passed documents is already existing
-        in the chosen index and returns a list of
-        documents that are not in the index yet.
+        Asynchronously checks whether any of the passed documents is already existing in the chosen index.
+
+        Returns a list of documents that are not in the index yet.
 
         :param documents: A list of Haystack Document objects.
         :param policy: The duplicate policy to use when writing documents.
@@ -1599,7 +2338,7 @@ class QdrantDocumentStore:
         if policy in (DuplicatePolicy.SKIP, DuplicatePolicy.FAIL):
             documents = self._drop_duplicate_documents(documents)
             documents_found = await self.get_documents_by_id_async(ids=[doc.id for doc in documents])
-            ids_exist_in_db: List[str] = [doc.id for doc in documents_found]
+            ids_exist_in_db: list[str] = [doc.id for doc in documents_found]
 
             if len(ids_exist_in_db) > 0 and policy == DuplicatePolicy.FAIL:
                 msg = f"Document with ids '{', '.join(ids_exist_in_db)} already exists in index = '{self.index}'."
@@ -1609,13 +2348,13 @@ class QdrantDocumentStore:
 
         return documents
 
-    def _drop_duplicate_documents(self, documents: List[Document]) -> List[Document]:
+    def _drop_duplicate_documents(self, documents: list[Document]) -> list[Document]:
         """
         Drop duplicate documents based on same hash ID.
 
         """
-        _hash_ids: Set = set()
-        _documents: List[Document] = []
+        _hash_ids: set = set()
+        _documents: list[Document] = []
 
         for document in documents:
             if document.id in _hash_ids:
@@ -1630,7 +2369,7 @@ class QdrantDocumentStore:
 
         return _documents
 
-    def _prepare_collection_params(self) -> Dict[str, Any]:
+    def _prepare_collection_params(self) -> dict[str, Any]:
         """
         Prepares the common parameters for collection creation.
         """
@@ -1643,10 +2382,9 @@ class QdrantDocumentStore:
             "optimizers_config": self.optimizers_config,
             "wal_config": self.wal_config,
             "quantization_config": self.quantization_config,
-            "init_from": self.init_from,
         }
 
-    def _prepare_client_params(self) -> Dict[str, Any]:
+    def _prepare_client_params(self) -> dict[str, Any]:
         """
         Prepares the common parameters for client initialization.
 
@@ -1674,10 +2412,10 @@ class QdrantDocumentStore:
         self,
         embedding_dim: int,
         distance: rest.Distance,
-        on_disk: Optional[bool] = None,
-        use_sparse_embeddings: Optional[bool] = None,
+        on_disk: bool | None = None,
+        use_sparse_embeddings: bool | None = None,
         sparse_idf: bool = False,
-    ) -> Tuple[Union[Dict[str, rest.VectorParams], rest.VectorParams], Optional[Dict[str, rest.SparseVectorParams]]]:
+    ) -> tuple[dict[str, rest.VectorParams] | rest.VectorParams, dict[str, rest.SparseVectorParams] | None]:
         """
         Prepares the configuration for creating or recreating a Qdrant collection.
 
@@ -1690,9 +2428,9 @@ class QdrantDocumentStore:
 
         # dense vectors configuration
         base_vectors_config = rest.VectorParams(size=embedding_dim, on_disk=on_disk, distance=distance)
-        vectors_config: Union[rest.VectorParams, Dict[str, rest.VectorParams]] = base_vectors_config
+        vectors_config: rest.VectorParams | dict[str, rest.VectorParams] = base_vectors_config
 
-        sparse_vectors_config: Optional[Dict[str, rest.SparseVectorParams]] = None
+        sparse_vectors_config: dict[str, rest.SparseVectorParams] | None = None
 
         if use_sparse_embeddings:
             # in this case, we need to define named vectors
@@ -1710,7 +2448,7 @@ class QdrantDocumentStore:
         return vectors_config, sparse_vectors_config
 
     @staticmethod
-    def _validate_filters(filters: Optional[Union[Dict[str, Any], rest.Filter]] = None) -> None:
+    def _validate_filters(filters: dict[str, Any] | rest.Filter | None = None) -> None:
         """
         Validates the filters provided for querying.
 
@@ -1726,8 +2464,8 @@ class QdrantDocumentStore:
             raise ValueError(msg)
 
     def _process_query_point_results(
-        self, results: List[rest.ScoredPoint], scale_score: bool = False
-    ) -> List[Document]:
+        self, results: list[rest.ScoredPoint], scale_score: bool = False
+    ) -> list[Document]:
         """
         Processes query results from Qdrant.
         """
@@ -1737,19 +2475,21 @@ class QdrantDocumentStore:
         ]
 
         if scale_score:
-            for document in documents:
-                score = document.score
-                if score is None:
-                    continue
-                if self.similarity == "cosine":
-                    score = (score + 1) / 2
-                else:
-                    score = float(1 / (1 + exp(-score / 100)))
-                document.score = score
+            documents = [
+                replace(
+                    document,
+                    score=(document.score + 1) / 2
+                    if self.similarity == "cosine"
+                    else float(1 / (1 + exp(-document.score / 100))),
+                )
+                if document.score is not None
+                else document
+                for document in documents
+            ]
 
         return documents
 
-    def _process_group_results(self, groups: List[rest.PointGroup]) -> List[Document]:
+    def _process_group_results(self, groups: list[rest.PointGroup]) -> list[Document]:
         """
         Processes grouped query results from Qdrant.
 

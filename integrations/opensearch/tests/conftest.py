@@ -1,135 +1,98 @@
 import asyncio
+import uuid
 
 import pytest
 from haystack import Document
 
 from haystack_integrations.document_stores.opensearch.document_store import OpenSearchDocumentStore
 
+COMMON_KWARGS = {
+    "hosts": ["https://localhost:9200"],
+    "http_auth": ("admin", "SecureHaystack!2026"),
+    "verify_certs": False,
+}
+DEFAULT_METHOD = {"space_type": "cosinesimil", "engine": "lucene", "name": "hnsw"}
 
-@pytest.fixture
-def document_store(request):
+
+def _get_unique_index_name() -> str:
     """
-    We use this document store for basic tests and for testing filters.
-    `return_embedding` is set to True because in filters tests we compare embeddings.
+    Generate a unique, valid OpenSearch index name for test isolation.
+
+    Each test gets its own index to enable parallel test execution without conflicts.
     """
-    hosts = ["https://localhost:9200"]
-    # Use a different index for each test so we can run them in parallel
-    index = f"{request.node.name}"
-
-    store = OpenSearchDocumentStore(
-        hosts=hosts,
-        index=index,
-        http_auth=("admin", "admin"),
-        verify_certs=False,
-        embedding_dim=768,
-        return_embedding=True,
-        method={"space_type": "cosinesimil", "engine": "nmslib", "name": "hnsw"},
-    )
-    yield store
-
-    store._ensure_initialized()
-    assert store._client
-    store._client.indices.delete(index=index, params={"ignore": [400, 404]})
-    asyncio.run(store._async_client.close())
+    return f"test_{uuid.uuid4().hex}"
 
 
 @pytest.fixture
-def document_store_2(request):
-    hosts = ["https://localhost:9200"]
-    index = f"test_index_2_{request.node.name}"
+def opensearch_store():
+    created: list[OpenSearchDocumentStore] = []
 
-    store = OpenSearchDocumentStore(
-        hosts=hosts,
-        index=index,
-        http_auth=("admin", "admin"),
-        verify_certs=False,
-        embedding_dim=768,
-        return_embedding=False,
-        method={"space_type": "cosinesimil", "engine": "nmslib", "name": "hnsw"},
-    )
-    yield store
+    def _make(**overrides) -> OpenSearchDocumentStore:
+        kwargs = {
+            **COMMON_KWARGS,
+            "index": _get_unique_index_name(),
+            "embedding_dim": 768,
+            "return_embedding": True,
+            "method": DEFAULT_METHOD,
+            **overrides,
+        }
+        store = OpenSearchDocumentStore(**kwargs)
+        store._ensure_initialized()
+        created.append(store)
+        return store
 
-    # Cleanup
-    store._ensure_initialized()
-    assert store._client
-    store._client.indices.delete(index=index, params={"ignore": [400, 404]})
+    yield _make
+
+    for store in created:
+        asyncio.run(store._ensure_initialized_async())
+        store._client.indices.delete(index=store._index, params={"ignore": [400, 404]})
+        asyncio.run(store._async_client.close())
 
 
 @pytest.fixture
-def document_store_readonly(request):
-    """
-    A document store that does not automatically create the underlying index.
-    """
-    hosts = ["https://localhost:9200"]
-    # Use a different index for each test so we can run them in parallel
-    index = f"{request.node.name}"
+def document_store(opensearch_store):
+    return opensearch_store()
 
-    store = OpenSearchDocumentStore(
-        hosts=hosts,
-        index=index,
-        http_auth=("admin", "admin"),
-        verify_certs=False,
-        embedding_dim=768,
-        method={"space_type": "cosinesimil", "engine": "nmslib", "name": "hnsw"},
-        create_index=False,
-    )
-    store._ensure_initialized()
-    assert store._client
+
+@pytest.fixture
+def document_store_2(opensearch_store):
+    return opensearch_store(return_embedding=False)
+
+
+@pytest.fixture
+def document_store_readonly(opensearch_store):
+    store = opensearch_store(create_index=False)
     store._client.cluster.put_settings(body={"transient": {"action.auto_create_index": False}})
     yield store
-
     store._client.cluster.put_settings(body={"transient": {"action.auto_create_index": True}})
-    store._client.indices.delete(index=index, params={"ignore": [400, 404]})
-    asyncio.run(store._async_client.close())
 
 
 @pytest.fixture
-def document_store_embedding_dim_4_no_emb_returned(request):
-    """
-    A document store with embedding dimension 4 that does not return embeddings.
-    """
-    hosts = ["https://localhost:9200"]
-    # Use a different index for each test so we can run them in parallel
-    index = f"{request.node.name}"
-
-    store = OpenSearchDocumentStore(
-        hosts=hosts,
-        index=index,
-        http_auth=("admin", "admin"),
-        verify_certs=False,
-        embedding_dim=4,
-        return_embedding=False,
-        method={"space_type": "cosinesimil", "engine": "nmslib", "name": "hnsw"},
-    )
-    yield store
-
-    store._client.indices.delete(index=index, params={"ignore": [400, 404]})
-    asyncio.run(store._async_client.close())
+def document_store_embedding_dim_4_no_emb_returned(opensearch_store):
+    return opensearch_store(embedding_dim=4, return_embedding=False)
 
 
 @pytest.fixture
-def document_store_embedding_dim_4_no_emb_returned_faiss(request):
+def document_store_embedding_dim_4_no_emb_returned_faiss(opensearch_store):
     """
     A document store with embedding dimension 4 that uses a FAISS engine with HNSW algorithm for vector search.
     We use this document store for testing efficient k-NN filtering according to
     https://opensearch.org/docs/latest/vector-search/filter-search-knn/efficient-knn-filtering/.
     """
-    hosts = ["https://localhost:9200"]
-    # Use a different index for each test so we can run them in parallel
-    index = f"{request.node.name}"
-
-    store = OpenSearchDocumentStore(
-        hosts=hosts,
-        index=index,
-        http_auth=("admin", "admin"),
-        verify_certs=False,
+    return opensearch_store(
         embedding_dim=4,
         method={"space_type": "innerproduct", "engine": "faiss", "name": "hnsw"},
     )
-    yield store
 
-    store._client.indices.delete(index=index, params={"ignore": [400, 404]})
-    asyncio.run(store._async_client.close())
+
+@pytest.fixture
+def document_store_nested(opensearch_store):
+    return opensearch_store(return_embedding=False, nested_fields=["refs", "tags"])
+
+
+@pytest.fixture
+def document_store_wildcard_nested(opensearch_store):
+    return opensearch_store(return_embedding=False, nested_fields="*")
 
 
 @pytest.fixture

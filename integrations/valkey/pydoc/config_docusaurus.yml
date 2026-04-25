@@ -1,0 +1,15 @@
+loaders:
+  - modules:
+      - haystack_integrations.components.retrievers.valkey.embedding_retriever
+      - haystack_integrations.document_stores.valkey.document_store
+      - haystack_integrations.document_stores.valkey.filters
+    search_path: [../src]
+processors:
+  - type: filter
+    documented_only: true
+    skip_empty_modules: true
+renderer:
+  description: Valkey integration for Haystack
+  id: integrations-valkey
+  filename: valkey.md
+  title: Valkey

@@ -1,4 +1,8 @@
-from typing import Any, Dict, List, Optional, Union
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from typing import Any
 
 from haystack import component, logging
 
@@ -28,14 +32,17 @@ class LlamaCppGenerator:
     def __init__(
         self,
         model: str,
-        n_ctx: Optional[int] = 0,
-        n_batch: Optional[int] = 512,
-        model_kwargs: Optional[Dict[str, Any]] = None,
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+        n_ctx: int | None = 0,
+        n_batch: int | None = 512,
+        model_kwargs: dict[str, Any] | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """
+        Initialize LlamaCppGenerator.
+
         :param model: The path of a quantized model for text generation, for example, "zephyr-7b-beta.Q4_0.gguf".
             If the model path is also specified in the `model_kwargs`, this parameter will be ignored.
+
         :param n_ctx: The number of tokens in the context. When set to 0, the context will be taken from the model.
         :param n_batch: Prompt processing maximum batch size.
         :param model_kwargs: Dictionary containing keyword arguments used to initialize the LLM for text generation.
@@ -62,16 +69,17 @@ class LlamaCppGenerator:
         self.n_batch = n_batch
         self.model_kwargs = model_kwargs
         self.generation_kwargs = generation_kwargs
-        self.model: Optional[Llama] = None
+        self.model: Llama | None = None
 
-    def warm_up(self):
+    def warm_up(self) -> None:
+        """Load and initialize the llama.cpp model."""
         if self.model is None:
             self.model = Llama(**self.model_kwargs)
 
-    @component.output_types(replies=List[str], meta=List[Dict[str, Any]])
+    @component.output_types(replies=list[str], meta=list[dict[str, Any]])
     def run(
-        self, prompt: str, generation_kwargs: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Union[List[str], List[Dict[str, Any]]]]:
+        self, prompt: str, generation_kwargs: dict[str, Any] | None = None
+    ) -> dict[str, list[str] | list[dict[str, Any]]]:
         """
         Run the text generation model on the given prompt.
 
@@ -84,8 +92,7 @@ class LlamaCppGenerator:
             - `meta`: metadata about the request.
         """
         if self.model is None:
-            error_msg = "The model has not been loaded. Please call warm_up() before running."
-            raise RuntimeError(error_msg)
+            self.warm_up()
 
         if not prompt:
             return {"replies": []}
@@ -93,7 +100,7 @@ class LlamaCppGenerator:
         # merge generation kwargs from init method with those from run method
         updated_generation_kwargs = {**self.generation_kwargs, **(generation_kwargs or {})}
 
-        output = self.model.create_completion(prompt=prompt, **updated_generation_kwargs)
+        output = self.model.create_completion(prompt=prompt, **updated_generation_kwargs)  # type: ignore[union-attr]
         if not isinstance(output, dict):
             msg = f"Expected a dictionary response, got a different object: {output}"
             raise ValueError(msg)

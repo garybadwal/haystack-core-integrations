@@ -1,14 +1,20 @@
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict
+from typing import Any
 
 from optimum.onnxruntime.configuration import AutoOptimizationConfig, OptimizationConfig
 
 
 class OptimumEmbedderOptimizationMode(Enum):
     """
-    [ONXX Optimization modes](https://huggingface.co/docs/optimum/onnxruntime/usage_guides/optimization)
-    support by the Optimum Embedders.
+    ONNX Optimization modes supported by the Optimum Embedders.
+
+    See [Optimum ONNX optimization docs](https://huggingface.co/docs/optimum/onnxruntime/usage_guides/optimization)
+    for more details.
     """
 
     #: Basic general optimizations.
@@ -23,7 +29,7 @@ class OptimumEmbedderOptimizationMode(Enum):
     #: Same as O3 with mixed precision.
     O4 = "o4"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.value
 
     @classmethod
@@ -77,7 +83,7 @@ class OptimumEmbedderOptimizationConfig:
             msg = f"Unknown optimization mode '{self.mode}'"
             raise ValueError(msg)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Convert the configuration to a dictionary.
 
@@ -90,7 +96,7 @@ class OptimumEmbedderOptimizationConfig:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OptimumEmbedderOptimizationConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "OptimumEmbedderOptimizationConfig":
         """
         Create an optimization configuration from a dictionary.
 

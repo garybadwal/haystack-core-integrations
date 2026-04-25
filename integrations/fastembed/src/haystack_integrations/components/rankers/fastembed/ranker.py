@@ -1,4 +1,9 @@
-from typing import Any, Dict, List, Optional
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from dataclasses import replace
+from typing import Any
 
 from haystack import Document, component, default_from_dict, default_to_dict, logging
 
@@ -10,8 +15,9 @@ logger = logging.getLogger(__name__)
 @component
 class FastembedRanker:
     """
-    Ranks Documents based on their similarity to the query using
-    [Fastembed models](https://qdrant.github.io/fastembed/examples/Supported_Models/).
+    Ranks Documents based on their similarity to the query using Fastembed models.
+
+    See https://qdrant.github.io/fastembed/examples/Supported_Models/ for supported models.
 
     Documents are indexed from most to least semantically relevant to the query.
 
@@ -35,14 +41,14 @@ class FastembedRanker:
         self,
         model_name: str = "Xenova/ms-marco-MiniLM-L-6-v2",
         top_k: int = 10,
-        cache_dir: Optional[str] = None,
-        threads: Optional[int] = None,
+        cache_dir: str | None = None,
+        threads: int | None = None,
         batch_size: int = 64,
-        parallel: Optional[int] = None,
+        parallel: int | None = None,
         local_files_only: bool = False,
-        meta_fields_to_embed: Optional[List[str]] = None,
+        meta_fields_to_embed: list[str] | None = None,
         meta_data_separator: str = "\n",
-    ):
+    ) -> None:
         """
         Creates an instance of the 'FastembedRanker'.
 
@@ -76,9 +82,9 @@ class FastembedRanker:
         self.local_files_only = local_files_only
         self.meta_fields_to_embed = meta_fields_to_embed or []
         self.meta_data_separator = meta_data_separator
-        self._model: Optional[TextCrossEncoder] = None
+        self._model: TextCrossEncoder | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -99,7 +105,7 @@ class FastembedRanker:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "FastembedRanker":
+    def from_dict(cls, data: dict[str, Any]) -> "FastembedRanker":
         """
         Deserializes the component from a dictionary.
 
@@ -110,7 +116,7 @@ class FastembedRanker:
         """
         return default_from_dict(cls, data)
 
-    def warm_up(self):
+    def warm_up(self) -> None:
         """
         Initializes the component.
         """
@@ -122,9 +128,10 @@ class FastembedRanker:
                 local_files_only=self.local_files_only,
             )
 
-    def _prepare_fastembed_input_docs(self, documents: List[Document]) -> List[str]:
+    def _prepare_fastembed_input_docs(self, documents: list[Document]) -> list[str]:
         """
         Prepare the input by concatenating the document text with the metadata fields specified.
+
         :param documents: The list of Document objects.
 
         :return: A list of strings to be given as input to Fastembed model.
@@ -139,8 +146,8 @@ class FastembedRanker:
 
         return concatenated_input_list
 
-    @component.output_types(documents=List[Document])
-    def run(self, query: str, documents: List[Document], top_k: Optional[int] = None) -> Dict[str, List[Document]]:
+    @component.output_types(documents=list[Document])
+    def run(self, query: str, documents: list[Document], top_k: int | None = None) -> dict[str, list[Document]]:
         """
         Returns a list of documents ranked by their similarity to the given query, using FastEmbed.
 
@@ -173,13 +180,12 @@ class FastembedRanker:
             raise ValueError(msg)
 
         if self._model is None:
-            msg = "The ranker model has not been loaded. Please call warm_up() before running."
-            raise RuntimeError(msg)
+            self.warm_up()
 
         fastembed_input_docs = self._prepare_fastembed_input_docs(documents)
 
         scores = list(
-            self._model.rerank(
+            self._model.rerank(  # type: ignore[union-attr]
                 query=query,
                 documents=fastembed_input_docs,
                 batch_size=self.batch_size,
@@ -188,15 +194,11 @@ class FastembedRanker:
         )
 
         # Combine the two lists into a single list of tuples
-        doc_scores = list(zip(documents, scores))
+        doc_scores = list(zip(documents, scores, strict=True))
 
         # Sort the list of tuples by the score in descending order
         sorted_doc_scores = sorted(doc_scores, key=lambda x: x[1], reverse=True)
 
-        # Get the top_k documents
-        top_k_documents = []
-        for doc, score in sorted_doc_scores[:top_k]:
-            doc.score = score
-            top_k_documents.append(doc)
+        top_k_documents = [replace(doc, score=score) for doc, score in sorted_doc_scores[:top_k]]
 
         return {"documents": top_k_documents}

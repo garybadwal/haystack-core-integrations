@@ -1,4 +1,5 @@
-from typing import Any, Dict, List
+from dataclasses import replace
+from typing import Any
 
 from haystack import logging
 from haystack.dataclasses import ByteStream, Document
@@ -7,10 +8,11 @@ from psycopg.types.json import Jsonb
 logger = logging.getLogger(__name__)
 
 
-def _from_haystack_to_pg_documents(documents: List[Document]) -> List[Dict[str, Any]]:
+def _from_haystack_to_pg_documents(documents: list[Document]) -> list[dict[str, Any]]:
     """
-    Internal method to convert a list of Haystack Documents to a list of dictionaries that can be used to insert
-    documents into the PgvectorDocumentStore.
+    Internal method to convert a list of Haystack Documents to a list of dictionaries.
+
+    The resulting dictionaries can be used to insert documents into the PgvectorDocumentStore.
     """
 
     db_documents = []
@@ -22,6 +24,9 @@ def _from_haystack_to_pg_documents(documents: List[Document]) -> List[Dict[str, 
         db_document["blob_meta"] = Jsonb(blob.meta) if blob and blob.meta else None
         db_document["blob_mime_type"] = blob.mime_type if blob and blob.mime_type else None
         db_document["meta"] = Jsonb(db_document["meta"])
+        # PostgreSQL text fields cannot contain NUL (0x00) bytes, removing NUL bytes
+        if content := db_document["content"]:
+            db_document["content"] = content.replace("\x00", "")
 
         if "sparse_embedding" in db_document:
             sparse_embedding = db_document.pop("sparse_embedding", None)
@@ -38,7 +43,7 @@ def _from_haystack_to_pg_documents(documents: List[Document]) -> List[Dict[str, 
     return db_documents
 
 
-def _from_pg_to_haystack_documents(documents: List[Dict[str, Any]]) -> List[Document]:
+def _from_pg_to_haystack_documents(documents: list[dict[str, Any]]) -> list[Document]:
     """
     Internal method to convert a list of dictionaries from pgvector to a list of Haystack Documents.
     """
@@ -65,7 +70,7 @@ def _from_pg_to_haystack_documents(documents: List[Dict[str, Any]]) -> List[Docu
 
         if blob_data:
             blob = ByteStream(data=blob_data, meta=blob_meta, mime_type=blob_mime_type)
-            haystack_document.blob = blob
+            haystack_document = replace(haystack_document, blob=blob)
 
         haystack_documents.append(haystack_document)
 

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import base64
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 from haystack import Document, component, default_from_dict, default_to_dict, logging
@@ -21,7 +21,7 @@ class GitHubItem:
     path: str
     size: int
     url: str
-    content: Optional[str] = None
+    content: str | None = None
 
 
 @component
@@ -71,12 +71,12 @@ class GitHubRepoViewer:
     def __init__(
         self,
         *,
-        github_token: Optional[Secret] = None,
+        github_token: Secret | None = None,
         raise_on_failure: bool = True,
         max_file_size: int = 1_000_000,  # 1MB default limit
-        repo: Optional[str] = None,
+        repo: str | None = None,
         branch: str = "main",
-    ):
+    ) -> None:
         """
         Initialize the component.
 
@@ -114,7 +114,7 @@ class GitHubRepoViewer:
                 headers["Authorization"] = f"Bearer {token_value}"
         return headers
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize the component to a dictionary.
 
@@ -130,7 +130,7 @@ class GitHubRepoViewer:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "GitHubRepoViewer":
+    def from_dict(cls, data: dict[str, Any]) -> "GitHubRepoViewer":
         """
         Deserialize the component from a dictionary.
 
@@ -181,7 +181,7 @@ class GitHubRepoViewer:
             },
         )
 
-    def _create_directory_documents(self, items: List[GitHubItem]) -> List[Document]:
+    def _create_directory_documents(self, items: list[GitHubItem]) -> list[Document]:
         """Create a list of Documents from directory contents"""
         return [
             Document(
@@ -206,8 +206,8 @@ class GitHubRepoViewer:
             },
         )
 
-    @component.output_types(documents=List[Document])
-    def run(self, path: str, repo: Optional[str] = None, branch: Optional[str] = None) -> Dict[str, List[Document]]:
+    @component.output_types(documents=list[Document])
+    def run(self, path: str, repo: str | None = None, branch: str | None = None) -> dict[str, list[Document]]:
         """
         Process a GitHub repository path and return documents.
 

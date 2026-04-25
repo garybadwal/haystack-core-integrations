@@ -13,6 +13,13 @@ COHERE_API_URL = "https://api.cohere.com"
 
 
 class TestCohereTextEmbedder:
+    def test_supported_models(self) -> None:
+        """SUPPORTED_MODELS is a non-empty list of strings."""
+        models = CohereTextEmbedder.SUPPORTED_MODELS
+        assert isinstance(models, list)
+        assert len(models) > 0
+        assert all(isinstance(m, str) for m in models)
+
     def test_init_default(self, monkeypatch):
         """
         Test default initialization parameters for CohereTextEmbedder.
@@ -21,7 +28,7 @@ class TestCohereTextEmbedder:
         embedder = CohereTextEmbedder()
 
         assert embedder.api_key == Secret.from_env_var(["COHERE_API_KEY", "CO_API_KEY"])
-        assert embedder.model == "embed-english-v2.0"
+        assert embedder.model == "embed-v4.0"
         assert embedder.input_type == "search_query"
         assert embedder.api_base_url == COHERE_API_URL
         assert embedder.truncate == "END"
@@ -58,7 +65,7 @@ class TestCohereTextEmbedder:
             "type": "haystack_integrations.components.embedders.cohere.text_embedder.CohereTextEmbedder",
             "init_parameters": {
                 "api_key": {"env_vars": ["COHERE_API_KEY", "CO_API_KEY"], "strict": True, "type": "env_var"},
-                "model": "embed-english-v2.0",
+                "model": "embed-v4.0",
                 "input_type": "search_query",
                 "api_base_url": COHERE_API_URL,
                 "truncate": "END",
@@ -101,7 +108,7 @@ class TestCohereTextEmbedder:
             "type": "haystack_integrations.components.embedders.cohere.text_embedder.CohereTextEmbedder",
             "init_parameters": {
                 "api_key": {"env_vars": ["COHERE_API_KEY", "CO_API_KEY"], "strict": True, "type": "env_var"},
-                "model": "embed-english-v2.0",
+                "model": "embed-v4.0",
                 "input_type": "search_query",
                 "api_base_url": COHERE_API_URL,
                 "truncate": "END",
@@ -113,7 +120,7 @@ class TestCohereTextEmbedder:
 
         embedder = CohereTextEmbedder.from_dict(component_dict)
         assert embedder.api_key == Secret.from_env_var(["COHERE_API_KEY", "CO_API_KEY"])
-        assert embedder.model == "embed-english-v2.0"
+        assert embedder.model == "embed-v4.0"
         assert embedder.input_type == "search_query"
         assert embedder.api_base_url == COHERE_API_URL
         assert embedder.truncate == "END"
@@ -141,7 +148,7 @@ class TestCohereTextEmbedder:
         text = "The food was delicious"
         result = embedder.run(text=text)
 
-        assert len(result["embedding"]) == 4096
+        assert len(result["embedding"]) == 1536
         assert all(isinstance(x, float) for x in result["embedding"])
 
     @pytest.mark.asyncio
@@ -155,5 +162,5 @@ class TestCohereTextEmbedder:
         text = "The food was delicious"
         result = await embedder.run_async(text=text)
 
-        assert len(result["embedding"]) == 4096
+        assert len(result["embedding"]) == 1536
         assert all(isinstance(x, float) for x in result["embedding"])

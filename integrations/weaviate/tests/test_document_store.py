@@ -5,19 +5,24 @@
 import base64
 import logging
 import os
-from typing import List
-from unittest.mock import MagicMock, patch
+from collections.abc import Generator
+from dataclasses import replace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import weaviate
 from dateutil import parser
 from haystack.dataclasses.byte_stream import ByteStream
 from haystack.dataclasses.document import Document
-from haystack.document_stores.errors import DocumentStoreError
+from haystack.document_stores.errors import DocumentStoreError, DuplicateDocumentError
+from haystack.document_stores.types.policy import DuplicatePolicy
 from haystack.testing.document_store import (
-    CountDocumentsTest,
-    DeleteDocumentsTest,
-    FilterDocumentsTest,
-    WriteDocumentsTest,
+    CountDocumentsByFilterTest,
+    CountUniqueMetadataByFilterTest,
+    DocumentStoreBaseExtendedTests,
+    GetMetadataFieldMinMaxTest,
+    GetMetadataFieldsInfoTest,
+    GetMetadataFieldUniqueValuesTest,
     create_filterable_docs,
 )
 from haystack.utils.auth import Secret
@@ -43,14 +48,165 @@ from haystack_integrations.document_stores.weaviate.document_store import (
 
 @patch("haystack_integrations.document_stores.weaviate.document_store.weaviate.WeaviateClient")
 def test_init_is_lazy(_mock_client):
-    _ = WeaviateDocumentStore()
+    WeaviateDocumentStore()
     _mock_client.assert_not_called()
 
 
+def test_client_raises_without_auth_for_cloud_url():
+    ds = WeaviateDocumentStore(url="something.weaviate.cloud")
+    with pytest.raises(ValueError, match="Auth credentials are required"):
+        ds.client  # noqa: B018
+
+
+@pytest.mark.asyncio
+async def test_async_client_raises_without_auth_for_cloud_url():
+    ds = WeaviateDocumentStore(url="something.weaviate.cloud")
+    with pytest.raises(ValueError, match="Auth credentials are required"):
+        await ds.async_client
+
+
+@patch("haystack_integrations.document_stores.weaviate.document_store.weaviate.connect_to_weaviate_cloud")
+def test_client_connects_to_weaviate_cloud(mock_connect, monkeypatch):
+    monkeypatch.setenv("WEAVIATE_API_KEY", "my_api_key")
+    mock_client = MagicMock()
+    mock_client.collections.exists.return_value = True
+    mock_connect.return_value = mock_client
+
+    ds = WeaviateDocumentStore(
+        url="rAnD0m.something.weaviate.cloud",
+        auth_client_secret=AuthApiKey(),
+        additional_headers={"X-HuggingFace-Api-Key": "k"},
+    )
+    assert ds.client is mock_client
+
+    mock_connect.assert_called_once()
+    _args, kwargs = mock_connect.call_args
+    assert kwargs["headers"] == {"X-HuggingFace-Api-Key": "k"}
+
+
+@pytest.mark.asyncio
+@patch("haystack_integrations.document_stores.weaviate.document_store.weaviate.use_async_with_weaviate_cloud")
+async def test_async_client_connects_to_weaviate_cloud(mock_connect, monkeypatch):
+    monkeypatch.setenv("WEAVIATE_API_KEY", "my_api_key")
+    mock_client = MagicMock()
+
+    async def connect() -> None:
+        return None
+
+    async def exists(_name: str) -> bool:
+        return True
+
+    mock_client.connect = connect
+    mock_client.collections.exists = exists
+    mock_connect.return_value = mock_client
+
+    ds = WeaviateDocumentStore(url="rAnD0m.something.weaviate.cloud", auth_client_secret=AuthApiKey())
+    assert await ds.async_client is mock_client
+    mock_connect.assert_called_once()
+
+
+def test_to_data_object_with_sparse_embedding_logs_warning(caplog):
+    doc = Document(content="test doc")
+    doc_dict = doc.to_dict()
+    doc_dict["sparse_embedding"] = {"indices": [0, 1], "values": [0.1, 0.2]}
+    with patch.object(Document, "to_dict", return_value=doc_dict), caplog.at_level(logging.WARNING):
+        data = WeaviateDocumentStore._to_data_object(doc)
+    assert "sparse_embedding" not in data
+    assert "sparse_embedding" in caplog.text
+
+
+def test_embedding_retrieval_raises_when_distance_and_certainty_both_set():
+    ds = WeaviateDocumentStore()
+    with pytest.raises(ValueError, match="Can't use 'distance' and 'certainty'"):
+        ds._embedding_retrieval(query_embedding=[0.1], distance=0.5, certainty=0.5)
+
+
+def test_handle_failed_objects_raises_document_store_error():
+    failed_obj = MagicMock()
+    failed_obj.object_.properties = {"_original_id": "doc-1"}
+    failed_obj.message = "boom"
+    with pytest.raises(DocumentStoreError, match=r"doc-1.*boom"):
+        WeaviateDocumentStore._handle_failed_objects([failed_obj])
+
+
+def test_to_document_handles_vector_variants():
+    data_no_vec = DataObject(properties={"_original_id": "1", "content": "x", "score": None}, vector=None)
+    assert WeaviateDocumentStore._to_document(data_no_vec).embedding is None
+
+    data_list_vec = DataObject(properties={"_original_id": "2", "content": "y", "score": None}, vector=[0.1, 0.2])
+    assert WeaviateDocumentStore._to_document(data_list_vec).embedding == [0.1, 0.2]
+
+
+def test_delete_by_filter_wraps_errors():
+    ds = WeaviateDocumentStore()
+    collection = MagicMock()
+    ds._collection = collection
+    filters = {"field": "meta.x", "operator": "==", "value": 1}
+
+    collection.data.delete_many.side_effect = weaviate.exceptions.WeaviateQueryError("bad", "GRPC")
+    with pytest.raises(DocumentStoreError, match="bad"):
+        ds.delete_by_filter(filters)
+
+    collection.data.delete_many.side_effect = RuntimeError("boom")
+    with pytest.raises(DocumentStoreError, match="boom"):
+        ds.delete_by_filter(filters)
+
+
+def test_update_by_filter_wraps_errors():
+    ds = WeaviateDocumentStore()
+    collection = MagicMock()
+    ds._collection = collection
+    filters = {"field": "meta.x", "operator": "==", "value": 1}
+
+    with pytest.raises(ValueError, match="Meta must be a dictionary"):
+        ds.update_by_filter(filters, meta="not-a-dict")  # type: ignore[arg-type]
+
+    obj = MagicMock(uuid="u", properties={"_original_id": "doc-1"}, vector=None)
+    collection.config.get.return_value.properties = [MagicMock(name="content")]
+    collection.query.fetch_objects.return_value = MagicMock(objects=[obj])
+    collection.data.replace.side_effect = RuntimeError("replace failed")
+    with pytest.raises(DocumentStoreError, match="doc-1"):
+        ds.update_by_filter(filters, {"category": "new"})
+
+
+@pytest.mark.asyncio
+async def test_write_documents_async_with_skip_and_fail_policies():
+    ds = WeaviateDocumentStore()
+    collection = MagicMock()
+    collection.data.exists = AsyncMock(return_value=True)
+    dup_error = weaviate.exceptions.UnexpectedStatusCodeError.__new__(weaviate.exceptions.UnexpectedStatusCodeError)
+    collection.data.insert = AsyncMock(side_effect=dup_error)
+
+    async def _get_collection():
+        return collection
+
+    with patch.object(
+        WeaviateDocumentStore, "async_collection", new_callable=lambda: property(lambda _self: _get_collection())
+    ):
+        doc = Document(content="x")
+
+        assert await ds.write_documents_async([doc], policy=DuplicatePolicy.SKIP) == 1
+        collection.data.insert.assert_not_called()
+
+        collection.data.exists = AsyncMock(return_value=False)
+        with pytest.raises(DuplicateDocumentError, match=doc.id):
+            await ds.write_documents_async([doc], policy=DuplicatePolicy.FAIL)
+
+        with pytest.raises(ValueError, match="Expected a Document"):
+            await ds.write_documents_async(["not-a-doc"], policy=DuplicatePolicy.FAIL)  # type: ignore[list-item]
+
+
 @pytest.mark.integration
-class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDocumentsTest, FilterDocumentsTest):
+class TestWeaviateDocumentStore(
+    DocumentStoreBaseExtendedTests,
+    CountDocumentsByFilterTest,
+    CountUniqueMetadataByFilterTest,
+    GetMetadataFieldsInfoTest,
+    GetMetadataFieldMinMaxTest,
+    GetMetadataFieldUniqueValuesTest,
+):
     @pytest.fixture
-    def document_store(self, request) -> WeaviateDocumentStore:
+    def document_store(self, request) -> Generator[WeaviateDocumentStore, None, None]:
         # Use a different index for each test so we can run them in parallel
         collection_settings = {
             "class": f"{request.node.name}",
@@ -59,6 +215,8 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
                 *DOCUMENT_COLLECTION_PROPERTIES,
                 {"name": "number", "dataType": ["int"]},
                 {"name": "date", "dataType": ["date"]},
+                {"name": "category", "dataType": ["text"]},
+                {"name": "status", "dataType": ["text"]},
             ],
         }
         store = WeaviateDocumentStore(
@@ -67,9 +225,10 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
         )
         yield store
         store.client.collections.delete(collection_settings["class"])
+        store.close()
 
     @pytest.fixture
-    def filterable_docs(self) -> List[Document]:
+    def filterable_docs(self) -> list[Document]:
         """
         This fixture has been copied from haystack/testing/document_store.py and modified to
         use a different date format.
@@ -82,11 +241,11 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
                 documents[i].meta["date"] = f"{date}Z"
         return documents
 
-    def assert_documents_are_equal(self, received: List[Document], expected: List[Document]):
+    def assert_documents_are_equal(self, received: list[Document], expected: list[Document]):
         assert len(received) == len(expected)
         received = sorted(received, key=lambda doc: doc.id)
         expected = sorted(expected, key=lambda doc: doc.id)
-        for received_doc, expected_doc in zip(received, expected):
+        for received_doc, expected_doc in zip(received, expected, strict=True):
             received_doc_dict = received_doc.to_dict(flatten=False)
             expected_doc_dict = expected_doc.to_dict(flatten=False)
 
@@ -131,7 +290,7 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
 
         # Trigger the actual database connection by accessing the `client` property so we
         # can assert the setup was good
-        _ = ds.client
+        ds.client  # noqa: B018
 
         # Verify client is created with correct parameters
         mock_weaviate_client_class.assert_called_once_with(
@@ -155,6 +314,22 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
         mock_client.collections.create_from_dict.assert_called_once_with(
             {"class": "My_collection", "properties": DOCUMENT_COLLECTION_PROPERTIES}
         )
+
+    def test_close(self, document_store: WeaviateDocumentStore) -> None:
+        # Initialise client and collection
+        assert document_store.client is not None
+        assert document_store.collection is not None
+
+        document_store.close()
+
+        assert document_store._client is None
+        assert document_store._collection is None
+
+        # Initialise client and collection, then test it stills works after reopening
+        assert document_store.client is not None
+        assert document_store.collection is not None
+
+        assert document_store.count_documents() == 0
 
     @patch("haystack_integrations.document_stores.weaviate.document_store.weaviate")
     def test_to_dict(self, _mock_weaviate, monkeypatch):
@@ -214,6 +389,7 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
                         "session_pool_max_retries": 3,
                         "session_pool_timeout": 5,
                     },
+                    "grpc_config": None,
                     "proxies": {"http": "http://proxy:1234", "https": None, "grpc": None},
                     "timeout": [30, 90],
                     "trust_env": False,
@@ -288,9 +464,9 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
         assert document_store._additional_config.connection.session_pool_maxsize == 20
         assert document_store._additional_config.connection.session_pool_timeout == 5
 
-    def test_to_data_object(self, document_store, test_files_path):
+    def test_to_data_object(self, test_files_path):
         doc = Document(content="test doc")
-        data = document_store._to_data_object(doc)
+        data = WeaviateDocumentStore._to_data_object(doc)
         assert data == {
             "_original_id": doc.id,
             "content": doc.content,
@@ -304,7 +480,7 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
             embedding=[1, 2, 3],
             meta={"key": "value"},
         )
-        data = document_store._to_data_object(doc)
+        data = WeaviateDocumentStore._to_data_object(doc)
         assert data == {
             "_original_id": doc.id,
             "content": doc.content,
@@ -314,7 +490,7 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
             "key": "value",
         }
 
-    def test_to_document(self, document_store, test_files_path):
+    def test_to_document(self, test_files_path):
         image = ByteStream.from_file_path(test_files_path / "robot1.jpg", mime_type="image/jpeg")
         data = DataObject(
             properties={
@@ -328,7 +504,7 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
             vector={"default": [1, 2, 3]},
         )
 
-        doc = document_store._to_document(data)
+        doc = WeaviateDocumentStore._to_document(data)
         assert doc.id == "123"
         assert doc.content == "some content"
         assert doc.blob == image
@@ -344,7 +520,7 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
         assert document_store.write_documents([doc]) == 1
         assert document_store.count_documents() == 1
 
-        doc.content = "test doc 2"
+        doc = replace(doc, content="test doc 2")
         assert document_store.write_documents([doc]) == 1
         assert document_store.count_documents() == 1
 
@@ -447,29 +623,32 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
             ],
         )
 
-    def test_meta_split_overlap_is_skipped(self, document_store):
+    def test_split_overlap_preserved(self, document_store):
+        """Split overlap meta is written and read back correctly."""
+        overlap = [
+            {"range": [3.0, 13.0], "doc_id": "34326b7e6be489cb4c031152fc378cb50479ca5fcc3861e7e61dfb2e4e4e968b"},
+            {"range": [0.0, 13.0], "doc_id": "780f791c09d499c0bf01f87bce047b45c44224d36c79f0c9d8c1405a3197fc1a"},
+        ]
         doc = Document(
-            content="The moonlight shimmered ",
+            id="6edd24e8b01f3cd6e4b71fef7d57b52f17664e14db5ab01b8ef429f97add3620",
+            content="an eighth test. ",
             meta={
-                "source_id": "62049ba1d1e1d5ebb1f6230b0b00c5356b8706c56e0b9c36b1dfc86084cd75f0",
-                "page_number": 1,
-                "split_id": 0,
-                "split_idx_start": 0,
-                "_split_overlap": [
-                    {"doc_id": "68ed48ba830048c5d7815874ed2de794722e6d10866b6c55349a914fd9a0df65", "range": (0, 20)}
-                ],
+                "_split_overlap": overlap,
+                "page_number": 1.0,
+                "split_id": 33.0,
+                "split_idx_start": 159.0,
+                "source_id": "fdbde6d217f04d3dd60c01f36541794f3153a61f13b4ca669655f4c5610c1664",
             },
         )
         document_store.write_documents([doc])
-
         written_doc = document_store.filter_documents()[0]
-
-        assert written_doc.content == "The moonlight shimmered "
-        assert written_doc.meta["source_id"] == "62049ba1d1e1d5ebb1f6230b0b00c5356b8706c56e0b9c36b1dfc86084cd75f0"
-        assert written_doc.meta["page_number"] == 1.0
-        assert written_doc.meta["split_id"] == 0.0
-        assert written_doc.meta["split_idx_start"] == 0.0
-        assert "_split_overlap" not in written_doc.meta
+        assert "_split_overlap" in written_doc.meta
+        written_overlap = written_doc.meta["_split_overlap"]
+        assert len(written_overlap) == 2
+        assert written_overlap[0]["doc_id"] == overlap[0]["doc_id"]
+        assert list(written_overlap[0]["range"]) == [3, 13]
+        assert written_overlap[1]["doc_id"] == overlap[1]["doc_id"]
+        assert list(written_overlap[1]["range"]) == [0, 13]
 
     def test_bm25_retrieval(self, document_store):
         document_store.write_documents(
@@ -796,13 +975,6 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
         document_store = WeaviateDocumentStore(embedded_options=EmbeddedOptions())
         assert document_store.client
 
-    def test_delete_all_documents(self, document_store):
-        docs = [Document(content="test doc 1"), Document(content="test doc 2")]
-        assert document_store.write_documents(docs) == 2
-        assert document_store.count_documents() == 2
-        document_store.delete_all_documents()
-        assert document_store.count_documents() == 0
-
     def test_delete_all_documents_recreate(self, document_store):
         docs = [Document(content="test doc 1"), Document(content="test doc 2")]
         assert document_store.write_documents(docs) == 2
@@ -833,3 +1005,279 @@ class TestWeaviateDocumentStore(CountDocumentsTest, WriteDocumentsTest, DeleteDo
             document_store.delete_all_documents(batch_size=20000)
         assert document_store.count_documents() == 5
         assert "Not all documents have been deleted." in caplog.text
+
+    def test_update_by_filter_with_pagination(self, document_store, monkeypatch):
+        # Reduce DEFAULT_QUERY_LIMIT to test pagination without creating 10000+ documents
+        monkeypatch.setattr("haystack_integrations.document_stores.weaviate.document_store.DEFAULT_QUERY_LIMIT", 100)
+
+        docs = []
+        for index in range(250):
+            docs.append(
+                Document(content="This is some content", meta={"index": index, "status": "draft", "category": "test"})
+            )
+        document_store.write_documents(docs)
+
+        # update all documents should trigger pagination (3 pages)
+        updated_count = document_store.update_by_filter(
+            filters={"field": "category", "operator": "==", "value": "test"},
+            meta={"status": "published"},
+        )
+        assert updated_count == 250
+
+        # verify updates were correct
+        published_docs = document_store.filter_documents(
+            filters={"field": "status", "operator": "==", "value": "published"}
+        )
+        assert len(published_docs) == 250
+        for doc in published_docs:
+            assert doc.meta["category"] == "test"
+            assert doc.meta["status"] == "published"
+            assert "index" in doc.meta
+            assert 0 <= doc.meta["index"] < 250
+
+    def test_get_metadata_fields_info(self, document_store):
+        fields_info = document_store.get_metadata_fields_info()
+
+        # Verify special fields are excluded
+        assert "_original_id" not in fields_info
+        assert "content" not in fields_info
+        assert "blob_data" not in fields_info
+        assert "blob_mime_type" not in fields_info
+        assert "score" not in fields_info
+
+        assert "number" in fields_info
+        assert fields_info["number"]["type"] == "int"
+        assert "date" in fields_info
+        assert fields_info["date"]["type"] == "date"
+        assert "category" in fields_info
+        assert fields_info["category"]["type"] == "text"
+        assert "status" in fields_info
+        assert fields_info["status"]["type"] == "text"
+
+    def test_get_metadata_field_min_max_unsupported_type(self, document_store):
+        with pytest.raises(ValueError, match="doesn't support min/max aggregation"):
+            document_store.get_metadata_field_min_max("category")
+
+    def test_get_metadata_field_min_max_field_not_found(self, document_store):
+        with pytest.raises(ValueError, match="not found in collection schema"):
+            document_store.get_metadata_field_min_max("nonexistent_field")
+
+    def test_count_unique_metadata_by_filter_with_meta_prefix(self, document_store):
+        docs = [
+            Document(content="Doc 1", meta={"category": "TypeA"}),
+            Document(content="Doc 2", meta={"category": "TypeB"}),
+        ]
+        document_store.write_documents(docs)
+
+        result = document_store.count_unique_metadata_by_filter(
+            filters={"field": "meta.category", "operator": "in", "value": ["TypeA", "TypeB"]},
+            metadata_fields=["meta.category"],
+        )
+        assert result["category"] == 2
+
+    def test_count_unique_metadata_by_filter_no_matches(self, document_store):
+        docs = [
+            Document(content="Doc 1", meta={"category": "TypeA"}),
+        ]
+        document_store.write_documents(docs)
+
+        result = document_store.count_unique_metadata_by_filter(
+            filters={"field": "meta.category", "operator": "==", "value": "NonExistent"},
+            metadata_fields=["category"],
+        )
+        assert result["category"] == 0
+
+    def test_count_unique_metadata_by_filter_field_not_found(self, document_store):
+        with pytest.raises(ValueError, match="Fields not found in collection schema"):
+            document_store.count_unique_metadata_by_filter(
+                filters={"field": "meta.category", "operator": "==", "value": "TypeA"},
+                metadata_fields=["nonexistent_field"],
+            )
+
+    def test_get_metadata_field_unique_values_with_meta_prefix(self, document_store):
+        docs = [
+            Document(content="Doc 1", meta={"category": "TypeA"}),
+            Document(content="Doc 2", meta={"category": "TypeB"}),
+        ]
+        document_store.write_documents(docs)
+
+        values, total_count = document_store.get_metadata_field_unique_values("meta.category")
+        assert total_count == 2
+        assert set(values) == {"TypeA", "TypeB"}
+
+    def test_get_metadata_field_unique_values_with_search_term(self, document_store):
+        docs = [
+            Document(content="Python programming language", meta={"category": "TypeA"}),
+            Document(content="Java programming language", meta={"category": "TypeB"}),
+            Document(content="Python is great", meta={"category": "TypeC"}),
+            Document(content="JavaScript tutorial", meta={"category": "TypeD"}),
+        ]
+        document_store.write_documents(docs)
+
+        values, total_count = document_store.get_metadata_field_unique_values("category", search_term="Python")
+        assert total_count == 2
+        assert set(values) == {"TypeA", "TypeC"}
+
+    def test_get_metadata_field_unique_values_with_pagination(self, document_store):
+        docs = [
+            Document(content="Doc 1", meta={"category": "TypeA"}),
+            Document(content="Doc 2", meta={"category": "TypeB"}),
+            Document(content="Doc 3", meta={"category": "TypeC"}),
+            Document(content="Doc 4", meta={"category": "TypeD"}),
+            Document(content="Doc 5", meta={"category": "TypeE"}),
+        ]
+        document_store.write_documents(docs)
+
+        values, total_count = document_store.get_metadata_field_unique_values("category", from_=0, size=2)
+        assert total_count == 5
+        assert len(values) == 2
+
+        values2, total_count2 = document_store.get_metadata_field_unique_values("category", from_=2, size=2)
+        assert total_count2 == 5
+        assert len(values2) == 2
+
+        assert set(values).isdisjoint(set(values2))
+
+    def test_get_metadata_field_unique_values_field_not_found(self, document_store):
+        with pytest.raises(ValueError, match="not found in collection schema"):
+            document_store.get_metadata_field_unique_values("nonexistent_field")
+
+    def test_get_metadata_field_unique_values_empty_result(self, document_store):
+        values, total_count = document_store.get_metadata_field_unique_values("category")
+        assert total_count == 0
+        assert values == []
+
+    # --- Overrides of mixin tests to account for Weaviate-specific behaviour ---
+
+    def test_count_documents_by_filter_simple(self, document_store):
+        docs = [
+            Document(content="Doc 1", meta={"category": "TypeA"}),
+            Document(content="Doc 2", meta={"category": "TypeB"}),
+            Document(content="Doc 3", meta={"category": "TypeA"}),
+            Document(content="Doc 4", meta={"category": "TypeA"}),
+        ]
+        document_store.write_documents(docs)
+        assert document_store.count_documents() == 4
+
+        count = document_store.count_documents_by_filter(
+            filters={"field": "meta.category", "operator": "==", "value": "TypeA"}
+        )
+        assert count == 3
+
+        count = document_store.count_documents_by_filter(
+            filters={"field": "meta.category", "operator": "==", "value": "TypeB"}
+        )
+        assert count == 1
+
+        count = document_store.count_documents_by_filter(
+            filters={"field": "meta.category", "operator": "==", "value": "TypeC"}
+        )
+        assert count == 0
+
+    def test_count_documents_by_filter_compound(self, document_store):
+        """Test count_documents_by_filter() with AND filter."""
+        docs = [
+            Document(content="Doc 1", meta={"category": "TypeA", "status": "active"}),
+            Document(content="Doc 2", meta={"category": "TypeB", "status": "active"}),
+            Document(content="Doc 3", meta={"category": "TypeA", "status": "inactive"}),
+            Document(content="Doc 4", meta={"category": "TypeA", "status": "active"}),
+        ]
+        document_store.write_documents(docs)
+
+        count = document_store.count_documents_by_filter(  # type:ignore[attr-defined]
+            filters={
+                "operator": "AND",
+                "conditions": [
+                    {"field": "meta.category", "operator": "==", "value": "TypeA"},
+                    {"field": "meta.status", "operator": "==", "value": "active"},
+                ],
+            }
+        )
+        assert count == 2
+
+    def test_count_documents_by_filter_empty_collection(self, document_store):
+        """Test count_documents_by_filter() on an empty store."""
+        assert document_store.count_documents() == 0
+
+        count = document_store.count_documents_by_filter(  # type:ignore[attr-defined]
+            filters={"field": "meta.category", "operator": "==", "value": "TypeA"}
+        )
+        assert count == 0
+
+    def test_count_unique_metadata_by_filter_with_filter(self, document_store):
+        docs = [
+            Document(content="Doc 1", meta={"category": "TypeA", "status": "draft"}),
+            Document(content="Doc 2", meta={"category": "TypeB", "status": "published"}),
+            Document(content="Doc 3", meta={"category": "TypeA", "status": "draft"}),
+            Document(content="Doc 4", meta={"category": "TypeC", "status": "published"}),
+            Document(content="Doc 5", meta={"category": "TypeA", "status": "archived"}),
+        ]
+        document_store.write_documents(docs)
+
+        result = document_store.count_unique_metadata_by_filter(
+            filters={"field": "meta.category", "operator": "==", "value": "TypeA"}, metadata_fields=["status"]
+        )
+        assert result["status"] == 2
+
+    def test_count_unique_metadata_by_filter_with_multiple_filters(self, document_store):
+        """Test counting with multiple filters"""
+        docs = [
+            Document(content="Doc 1", meta={"category": "TypeA", "year": 2023}),
+            Document(content="Doc 2", meta={"category": "TypeA", "year": 2024}),
+            Document(content="Doc 3", meta={"category": "TypeB", "year": 2023}),
+            Document(content="Doc 4", meta={"category": "TypeB", "year": 2024}),
+        ]
+        document_store.write_documents(docs)
+        count = document_store.count_documents_by_filter(  # type:ignore[attr-defined]
+            filters={
+                "operator": "AND",
+                "conditions": [
+                    {"field": "meta.category", "operator": "==", "value": "TypeB"},
+                    {"field": "meta.year", "operator": "==", "value": 2023},
+                ],
+            }
+        )
+        assert count == 1
+
+    @staticmethod
+    def test_get_metadata_field_min_max_empty_collection(document_store):
+        # Weaviate requires fields to be declared in the schema before querying them.
+        # The mixin uses "priority" which is not in the pre-defined schema, so we use
+        # "number" which IS declared in the fixture's collection_settings.
+        assert document_store.count_documents() == 0
+        result = document_store.get_metadata_field_min_max("number")
+        assert result["min"] == 0
+        assert result["max"] == 0
+
+    @staticmethod
+    def test_get_metadata_fields_info_empty_collection(document_store):
+        # Weaviate collections always carry a fixed schema regardless of whether any
+        # documents have been written.  The fixture pre-declares "number", "date",
+        # "category" and "status", so get_metadata_fields_info() will return those
+        # even on an empty collection instead of the empty dict the generic mixin expects.
+        assert document_store.count_documents() == 0
+        fields_info = document_store.get_metadata_fields_info()
+        assert set(fields_info.keys()) == {"number", "date", "category", "status"}
+
+    @staticmethod
+    def test_count_unique_metadata_by_filter_all_documents(document_store):
+        # The generic mixin passes filters={} (empty dict) to mean "no filter".
+        # Weaviate's convert_filters() does not accept an empty dict; a filter that
+        # explicitly selects all documents must be used instead.
+        docs = [
+            Document(content="Doc 1", meta={"category": "A", "status": "active", "priority": 1}),
+            Document(content="Doc 2", meta={"category": "B", "status": "active", "priority": 2}),
+            Document(content="Doc 3", meta={"category": "A", "status": "inactive", "priority": 1}),
+            Document(content="Doc 4", meta={"category": "A", "status": "active", "priority": 3}),
+            Document(content="Doc 5", meta={"category": "C", "status": "active", "priority": 2}),
+        ]
+        document_store.write_documents(docs)
+        assert document_store.count_documents() == 5
+
+        counts = document_store.count_unique_metadata_by_filter(
+            filters={"field": "meta.priority", "operator": ">=", "value": 1},
+            metadata_fields=["category", "status", "priority"],
+        )
+        assert counts["category"] == 3
+        assert counts["status"] == 2
+        assert counts["priority"] == 3

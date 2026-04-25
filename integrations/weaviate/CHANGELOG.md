@@ -1,5 +1,83 @@
 # Changelog
 
+## [integrations/weaviate-v7.4.0] - 2026-03-17
+
+### 🐛 Bug Fixes
+
+- Weaviate - stop ignoring _split_overlap meta field (#2966)
+
+
+## [integrations/weaviate-v7.3.0] - 2026-03-11
+
+### 🚀 Features
+
+- Add missing async methods for `WeaviateDocumentStore` (#2929)
+
+
+## [integrations/weaviate-v7.2.0] - 2026-03-06
+
+### 🐛 Bug Fixes
+
+- Remove unnecessary connection test and add `close`/`close_async` methods to `WeaviateDocumentStore` (#2891)
+
+### 📚 Documentation
+
+- Simplify pydoc configs (#2855)
+
+### 🧪 Testing
+
+- Replacing each `DocumentStore` specific tests and used the generalised ones from `haystack.testing.document_store` (#2812)
+- Fix Weaviate tests to include grpc_config (#2871)
+
+
+## [integrations/weaviate-v7.1.0] - 2026-01-29
+
+### 🚀 Features
+
+- Adding count with filtering operations to `WeaviateDocumentStore` (#2767)
+
+
+## [integrations/weaviate-v7.0.0] - 2026-01-13
+
+### 🐛 Bug Fixes
+
+- `WeaviateDocumentStore `_to_document()` and `to_data_object()` should be static methods (#2669)
+
+### 🧹 Chores
+
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Weaviate - drop Python 3.9 and use X|Y typing (#2733)
+
+
+## [integrations/weaviate-v6.5.0] - 2026-01-08
+
+### 🚀 Features
+
+- Adding `delete_by_filter` and `update_by_filter` to `WeaviateDocumentStore` (#2656)
+
+
+## [integrations/weaviate-v6.4.0] - 2025-12-16
+
+### 🚀 Features
+
+- Add `run_async` to all Weaviate retrievers (#2607)
+
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+
+### 🌀 Miscellaneous
+
+- Enhancement: Adopt PEP 585 type hinting (part 5) (#2528)
+
 ## [integrations/weaviate-v6.3.0] - 2025-10-03
 
 ### 🚀 Features

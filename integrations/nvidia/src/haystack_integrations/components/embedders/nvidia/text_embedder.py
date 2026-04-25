@@ -4,7 +4,7 @@
 
 import os
 import warnings
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from haystack import component, default_from_dict, default_to_dict, logging
 from haystack.utils import Secret, deserialize_secrets_inplace
@@ -18,8 +18,7 @@ logger = logging.getLogger(__name__)
 @component
 class NvidiaTextEmbedder:
     """
-    A component for embedding strings using embedding models provided by
-    [NVIDIA NIMs](https://ai.nvidia.com).
+    A component for embedding strings using embedding models provided by [NVIDIA NIMs](https://ai.nvidia.com).
 
     For models that differentiate between query and document inputs,
     this component embeds the input string as a query.
@@ -31,7 +30,7 @@ class NvidiaTextEmbedder:
     text_to_embed = "I love pizza!"
 
     text_embedder = NvidiaTextEmbedder(model="nvidia/nv-embedqa-e5-v5", api_url="https://integrate.api.nvidia.com/v1")
-    text_embedder.warm_up()
+    # Components warm up automatically on first run.
 
     print(text_embedder.run(text_to_embed))
     ```
@@ -39,14 +38,14 @@ class NvidiaTextEmbedder:
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        api_key: Optional[Secret] = Secret.from_env_var("NVIDIA_API_KEY"),
+        model: str | None = None,
+        api_key: Secret | None = Secret.from_env_var("NVIDIA_API_KEY"),
         api_url: str = os.getenv("NVIDIA_API_URL", DEFAULT_API_URL),
         prefix: str = "",
         suffix: str = "",
-        truncate: Optional[Union[EmbeddingTruncateMode, str]] = None,
-        timeout: Optional[float] = None,
-    ):
+        truncate: EmbeddingTruncateMode | str | None = None,
+        timeout: float | None = None,
+    ) -> None:
         """
         Create a NvidiaTextEmbedder component.
 
@@ -81,7 +80,7 @@ class NvidiaTextEmbedder:
             truncate = EmbeddingTruncateMode.from_str(truncate)
         self.truncate = truncate
 
-        self.backend: Optional[Any] = None
+        self.backend: Any | None = None
         self._initialized = False
 
         if timeout is None:
@@ -90,9 +89,10 @@ class NvidiaTextEmbedder:
 
     @classmethod
     def class_name(cls) -> str:
+        """Return the class name identifier for serialization."""
         return "NvidiaTextEmbedder"
 
-    def default_model(self):
+    def default_model(self) -> None:
         """Set default model in local NIM mode."""
         valid_models = [
             model.id for model in self.available_models if not model.base_model or model.base_model == model.id
@@ -119,7 +119,7 @@ class NvidiaTextEmbedder:
             error_message = "No locally hosted model was found."
             raise ValueError(error_message)
 
-    def warm_up(self):
+    def warm_up(self) -> None:
         """
         Initializes the component.
         """
@@ -146,7 +146,7 @@ class NvidiaTextEmbedder:
             else:
                 self.default_model()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -165,14 +165,14 @@ class NvidiaTextEmbedder:
         )
 
     @property
-    def available_models(self) -> List[Model]:
+    def available_models(self) -> list[Model]:
         """
         Get a list of available models that work with NvidiaTextEmbedder.
         """
         return self.backend.models() if self.backend else []
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "NvidiaTextEmbedder":
+    def from_dict(cls, data: dict[str, Any]) -> "NvidiaTextEmbedder":
         """
         Deserializes the component from a dictionary.
 
@@ -186,8 +186,8 @@ class NvidiaTextEmbedder:
             deserialize_secrets_inplace(data["init_parameters"], keys=["api_key"])
         return default_from_dict(cls, data)
 
-    @component.output_types(embedding=List[float], meta=Dict[str, Any])
-    def run(self, text: str) -> Dict[str, Union[List[float], Dict[str, Any]]]:
+    @component.output_types(embedding=list[float], meta=dict[str, Any])
+    def run(self, text: str) -> dict[str, list[float] | dict[str, Any]]:
         """
         Embed a string.
 
@@ -197,21 +197,21 @@ class NvidiaTextEmbedder:
             A dictionary with the following keys and values:
             - `embedding` - Embedding of the text.
             - `meta` - Metadata on usage statistics, etc.
-        :raises RuntimeError:
-            If the component was not initialized.
         :raises TypeError:
             If the input is not a string.
+        :raises ValueError:
+            If the input string is empty.
         """
         if not self._initialized:
-            msg = "The embedding model has not been loaded. Please call warm_up() before running."
-            raise RuntimeError(msg)
-        elif not isinstance(text, str):
+            self.warm_up()
+
+        if not isinstance(text, str):
             msg = (
                 "NvidiaTextEmbedder expects a string as an input."
                 "In case you want to embed a list of Documents, please use the NvidiaDocumentEmbedder."
             )
             raise TypeError(msg)
-        elif not text:
+        if not text:
             msg = "Cannot embed an empty string."
             raise ValueError(msg)
 

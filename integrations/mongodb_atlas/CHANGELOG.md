@@ -1,5 +1,25 @@
 # Changelog
 
+## [integrations/mongodb_atlas-v4.1.0] - 2026-02-12
+
+### 🚀 Features
+
+- Add metadata exploration methods to MongoDBAtlasDocumentStore (#2820)
+
+
+## [integrations/mongodb_atlas-v4.0.0] - 2026-01-12
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Mongodb_atlas - drop Python 3.9 and use X|Y typing (#2718)
+
+### 🌀 Miscellaneous
+
+- Enhancement: Adopt PEP 585 type hinting (part 4) (#2527)
+- Fix: Fix doc links (#2661)
+
 ## [integrations/mongodb_atlas-v3.5.0] - 2025-11-06
 
 

@@ -7,13 +7,11 @@
 #
 # The pipeline workflow:
 # 1. Receives a user message requesting to create a JSON object from "Peter Parker" aka Superman.
-# 2. Processes the message through components to generate a response using Cohere command-r-08-2024 model.
+# 2. Processes the message through components to generate a response using Cohere command-a-03-2025 model.
 # 3. Validates the generated response against a predefined JSON schema for person data.
 # 4. If the response does not meet the schema, the JsonSchemaValidator provides details on how to correct the errors.
 # 4a. The pipeline loops back, using the error information to generate a new JSON object until it satisfies the schema.
 # 5. If the response is validated against the schema, outputs the validated JSON object.
-
-from typing import List
 
 from haystack import Pipeline
 from haystack.components.converters import OutputAdapter
@@ -39,10 +37,10 @@ person_schema = {
 pipe = Pipeline()
 
 # Add components to the pipeline
-pipe.add_component("joiner", BranchJoiner(List[ChatMessage]))
-pipe.add_component("fc_llm", CohereChatGenerator(model="command-r-08-2024"))
+pipe.add_component("joiner", BranchJoiner(list[ChatMessage]))
+pipe.add_component("fc_llm", CohereChatGenerator())
 pipe.add_component("validator", JsonSchemaValidator(json_schema=person_schema))
-(pipe.add_component("adapter", OutputAdapter("{{chat_message}}", List[ChatMessage])),)
+(pipe.add_component("adapter", OutputAdapter("{{chat_message}}", list[ChatMessage])),)
 # And connect them
 pipe.connect("adapter", "joiner")
 pipe.connect("joiner", "fc_llm")

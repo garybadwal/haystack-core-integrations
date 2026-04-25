@@ -1,5 +1,34 @@
 # Changelog
 
+## [integrations/openrouter-v1.0.0] - 2026-01-13
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+- Harden OpenRouter integration tests (#2590)
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Openrouter - drop Python 3.9 and use X|Y typing (#2720)
+
+### 🌀 Miscellaneous
+
+- Chore: Improve OpenRouter test fragility (#2572)
+- Test: More robust OpenRouter integration tests (#2575)
+- Chore: Fix flaky OpenRouter test (#2585)
+
+## [integrations/openrouter-v0.4.0] - 2025-11-26
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Update OpenRouterChatGenerator default model to openai/gpt-5-mini (#2555)
+
+### 🌀 Miscellaneous
+
+- Enhancement: Adopt PEP 585 type hinting (part 5) (#2528)
+
 ## [integrations/openrouter-v0.3.0] - 2025-10-23
 
 ### 🚀 Features

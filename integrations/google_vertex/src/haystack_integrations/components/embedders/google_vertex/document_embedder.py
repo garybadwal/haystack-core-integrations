@@ -1,6 +1,7 @@
 import math
 import time
-from typing import Any, Dict, List, Literal, Optional
+from dataclasses import replace
+from typing import Any, Literal, Optional
 
 import vertexai
 from haystack import component, default_from_dict, default_to_dict, logging
@@ -71,7 +72,7 @@ class VertexAIDocumentEmbedder:
         retries: int = 3,
         progress_bar: bool = True,
         truncate_dim: Optional[int] = None,
-        meta_fields_to_embed: Optional[List[str]] = None,
+        meta_fields_to_embed: Optional[list[str]] = None,
         embedding_separator: str = "\n",
     ) -> None:
         """
@@ -132,7 +133,7 @@ class VertexAIDocumentEmbedder:
         self.embedder = TextEmbeddingModel.from_pretrained(self.model)
         self.task_type = task_type
 
-    def _prepare_texts_to_embed(self, documents: List[Document]) -> List[str]:
+    def _prepare_texts_to_embed(self, documents: list[Document]) -> list[str]:
         """
         Prepare the texts to embed by concatenating the Document text with the metadata fields to embed.
         """
@@ -145,7 +146,7 @@ class VertexAIDocumentEmbedder:
             texts_to_embed.append(text_to_embed)
         return texts_to_embed
 
-    def get_text_embedding_input(self, batch: List[Document]) -> List[TextEmbeddingInput]:
+    def get_text_embedding_input(self, batch: list[Document]) -> list[TextEmbeddingInput]:
         """
         Converts a batch of Document objects into a list of TextEmbeddingInput objects.
 
@@ -158,7 +159,7 @@ class VertexAIDocumentEmbedder:
         texts_to_embed = self._prepare_texts_to_embed(documents=batch)
         return [TextEmbeddingInput(text=content, task_type=self.task_type) for content in texts_to_embed]
 
-    def embed_batch_by_smaller_batches(self, batch: List[str], subbatch=1) -> List[List[float]]:
+    def embed_batch_by_smaller_batches(self, batch: list[str], subbatch=1) -> list[list[float]]:
         """
         Embeds a batch of text strings by dividing them into smaller sub-batches.
         Args:
@@ -190,7 +191,7 @@ class VertexAIDocumentEmbedder:
 
         return embeddings_batch
 
-    def embed_batch(self, batch: List[str]) -> List[List[float]]:
+    def embed_batch(self, batch: list[str]) -> list[list[float]]:
         """
         Generate embeddings for a batch of text strings.
 
@@ -205,8 +206,8 @@ class VertexAIDocumentEmbedder:
 
         return embeddings
 
-    @component.output_types(documents=List[Document])
-    def run(self, documents: List[Document]):
+    @component.output_types(documents=list[Document])
+    def run(self, documents: list[Document]):
         """
         Processes all documents in batches while adhering to the API's token limit per request.
 
@@ -271,12 +272,11 @@ class VertexAIDocumentEmbedder:
             i += batch_size
             batch_number += 1
 
-        for doc, embeddings in zip(documents, all_embeddings):
-            doc.embedding = embeddings
+        documents = [replace(doc, embedding=emb) for doc, emb in zip(documents, all_embeddings)]
 
         return {"documents": documents}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -300,7 +300,7 @@ class VertexAIDocumentEmbedder:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "VertexAIDocumentEmbedder":
+    def from_dict(cls, data: dict[str, Any]) -> "VertexAIDocumentEmbedder":
         """
         Deserializes the component from a dictionary.
 

@@ -2,10 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import random
-import time
-from typing import List
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from elasticsearch.exceptions import BadRequestError  # type: ignore[import-not-found]
@@ -13,7 +12,14 @@ from haystack.dataclasses.document import Document
 from haystack.dataclasses.sparse_embedding import SparseEmbedding
 from haystack.document_stores.errors import DocumentStoreError, DuplicateDocumentError
 from haystack.document_stores.types import DuplicatePolicy
-from haystack.testing.document_store import DocumentStoreBaseTests
+from haystack.testing.document_store import (
+    CountDocumentsByFilterTest,
+    CountUniqueMetadataByFilterTest,
+    DocumentStoreBaseExtendedTests,
+    GetMetadataFieldMinMaxTest,
+    GetMetadataFieldsInfoTest,
+    GetMetadataFieldUniqueValuesTest,
+)
 from haystack.utils import Secret
 from haystack.utils.auth import TokenSecret
 
@@ -24,6 +30,48 @@ from haystack_integrations.document_stores.elasticsearch import ElasticsearchDoc
 def test_init_is_lazy(_mock_es_client):
     ElasticsearchDocumentStore(hosts="testhost")
     _mock_es_client.assert_not_called()
+
+
+def test_init_with_special_fields_raises_error():
+    with pytest.raises(ValueError, match=r"sparse_vector_field 'content' conflicts with a reserved field name\."):
+        ElasticsearchDocumentStore(sparse_vector_field="content")
+
+
+def test_init_with_custom_mapping_injects_sparse_vector():
+    custom_mapping = {"properties": {"some_field": {"type": "text"}}}
+    store = ElasticsearchDocumentStore(custom_mapping=custom_mapping, sparse_vector_field="my_sparse_vec")
+    assert "my_sparse_vec" in store._custom_mapping["properties"]
+    assert store._custom_mapping["properties"]["my_sparse_vec"] == {"type": "sparse_vector"}
+
+
+def test_handle_sparse_embedding_no_op_when_absent():
+    store = ElasticsearchDocumentStore(hosts="testhost")
+    doc_dict = {"id": "doc-1", "content": "hello"}
+    store._handle_sparse_embedding(doc_dict, "doc-1")
+    assert doc_dict == {"id": "doc-1", "content": "hello"}
+
+
+def test_handle_sparse_embedding_converts_to_es_format():
+    store = ElasticsearchDocumentStore(hosts="testhost", sparse_vector_field="my_sparse")
+    doc_dict = {
+        "id": "doc-1",
+        "sparse_embedding": {"indices": [0, 5], "values": [0.3, 0.7]},
+    }
+    store._handle_sparse_embedding(doc_dict, "doc-1")
+    assert "sparse_embedding" not in doc_dict
+    assert doc_dict["my_sparse"] == {"0": 0.3, "5": 0.7}
+
+
+def test_handle_sparse_embedding_warns_when_no_field_configured(caplog):
+    store = ElasticsearchDocumentStore(hosts="testhost")
+    doc_dict = {
+        "id": "doc-1",
+        "content": "hello",
+        "sparse_embedding": {"indices": [0, 1], "values": [0.5, 0.5]},
+    }
+    store._handle_sparse_embedding(doc_dict, "doc-1")
+    assert "but `sparse_vector_field` is not configured" in caplog.text
+    assert "sparse_embedding" not in doc_dict
 
 
 @patch("haystack_integrations.document_stores.elasticsearch.document_store.Elasticsearch")
@@ -38,12 +86,10 @@ def test_headers_are_supported(_mock_es_client):
     headers_found = kwargs["headers"]
     assert headers_found["header1"] == "value1"
     assert headers_found["header2"] == "value2"
-
     assert headers_found["user-agent"].startswith("haystack-py-ds/")
 
 
-@patch("haystack_integrations.document_stores.elasticsearch.document_store.Elasticsearch")
-def test_to_dict(_mock_elasticsearch_client):
+def test_to_dict():
     document_store = ElasticsearchDocumentStore(hosts="some hosts")
     res = document_store.to_dict()
     assert res == {
@@ -67,12 +113,12 @@ def test_to_dict(_mock_elasticsearch_client):
             "custom_mapping": None,
             "index": "default",
             "embedding_similarity_function": "cosine",
+            "sparse_vector_field": None,
         },
     }
 
 
-@patch("haystack_integrations.document_stores.elasticsearch.document_store.Elasticsearch")
-def test_from_dict(_mock_elasticsearch_client):
+def test_from_dict():
     data = {
         "type": "haystack_integrations.document_stores.elasticsearch.document_store.ElasticsearchDocumentStore",
         "init_parameters": {
@@ -82,6 +128,7 @@ def test_from_dict(_mock_elasticsearch_client):
             "api_key": None,
             "api_key_id": None,
             "embedding_similarity_function": "cosine",
+            "sparse_vector_field": None,
         },
     }
     document_store = ElasticsearchDocumentStore.from_dict(data)
@@ -89,16 +136,13 @@ def test_from_dict(_mock_elasticsearch_client):
     assert document_store._index == "default"
     assert document_store._custom_mapping is None
     assert document_store._api_key is None
+    assert document_store._sparse_vector_field is None
     assert document_store._api_key_id is None
     assert document_store._embedding_similarity_function == "cosine"
 
 
-@patch("haystack_integrations.document_stores.elasticsearch.document_store.Elasticsearch")
-def test_to_dict_with_api_keys_env_vars(_mock_elasticsearch_client, monkeypatch):
-    monkeypatch.setenv("ELASTIC_API_KEY", "test-api-key")
-    monkeypatch.setenv("ELASTIC_API_KEY_ID", "test-api-key-id")
+def test_to_dict_with_api_keys_env_vars():
     document_store = ElasticsearchDocumentStore(hosts="https://localhost:9200")
-    document_store.client()
     res = document_store.to_dict()
     assert res["init_parameters"]["api_key"] == {"type": "env_var", "env_vars": ["ELASTIC_API_KEY"], "strict": False}
     assert res["init_parameters"]["api_key_id"] == {
@@ -108,22 +152,26 @@ def test_to_dict_with_api_keys_env_vars(_mock_elasticsearch_client, monkeypatch)
     }
 
 
-@patch("haystack_integrations.document_stores.elasticsearch.document_store.Elasticsearch")
-def test_to_dict_with_api_keys_as_secret(_mock_elasticsearch_client, monkeypatch):
-    monkeypatch.setenv("ELASTIC_API_KEY", "test-api-key")
-    monkeypatch.setenv("ELASTIC_API_KEY_ID", "test-api-key-id")
-    with pytest.raises(ValueError):
+def test_to_dict_with_api_keys_as_secret():
+    with pytest.raises(ValueError, match="Cannot serialize token-based secret"):
         document_store = ElasticsearchDocumentStore(
             hosts="https://localhost:9200",
             api_key=TokenSecret(_token="test-api-key"),
             api_key_id=TokenSecret(_token="test-api-key-id"),
         )
-        document_store.client()
         _ = document_store.to_dict()
 
 
-@patch("haystack_integrations.document_stores.elasticsearch.document_store.Elasticsearch")
-def test_from_dict_with_api_keys_env_vars(_mock_elasticsearch_client):
+def test_to_dict_with_api_keys_str():
+    document_store = ElasticsearchDocumentStore(
+        hosts="https://localhost:9200", api_key="my_api_key", api_key_id="my_api_key_id"
+    )
+    res = document_store.to_dict()
+    assert res["init_parameters"]["api_key"] is None
+    assert res["init_parameters"]["api_key_id"] is None
+
+
+def test_from_dict_with_api_keys_env_vars():
     data = {
         "type": "haystack_integrations.document_stores.elasticsearch.document_store.ElasticsearchDocumentStore",
         "init_parameters": {
@@ -133,26 +181,60 @@ def test_from_dict_with_api_keys_env_vars(_mock_elasticsearch_client):
             "api_key": {"type": "env_var", "env_vars": ["ELASTIC_API_KEY"], "strict": False},
             "api_key_id": {"type": "env_var", "env_vars": ["ELASTIC_API_KEY_ID"], "strict": False},
             "embedding_similarity_function": "cosine",
+            "sparse_vector_field": None,
         },
     }
 
     document_store = ElasticsearchDocumentStore.from_dict(data)
-    assert document_store._api_key == {"type": "env_var", "env_vars": ["ELASTIC_API_KEY"], "strict": False}
-    assert document_store._api_key_id == {"type": "env_var", "env_vars": ["ELASTIC_API_KEY_ID"], "strict": False}
+    assert document_store._api_key == Secret.from_env_var("ELASTIC_API_KEY", strict=False)
+    assert document_store._api_key_id == Secret.from_env_var("ELASTIC_API_KEY_ID", strict=False)
 
 
-@patch("haystack_integrations.document_stores.elasticsearch.document_store.Elasticsearch")
-def test_api_key_validation_only_api_key(_mock_elasticsearch_client):
+def test_from_dict_with_api_keys_str():
+    data = {
+        "type": "haystack_integrations.document_stores.elasticsearch.document_store.ElasticsearchDocumentStore",
+        "init_parameters": {
+            "hosts": "some hosts",
+            "custom_mapping": None,
+            "index": "default",
+            "api_key": "my_api_key",
+            "api_key_id": "my_api_key_id",
+            "embedding_similarity_function": "cosine",
+            "sparse_vector_field": None,
+        },
+    }
+
+    document_store = ElasticsearchDocumentStore.from_dict(data)
+    assert document_store._api_key == "my_api_key"
+    assert document_store._api_key_id == "my_api_key_id"
+
+
+def test_from_dict_without_sparse_vector_field():
+    data = {
+        "type": "haystack_integrations.document_stores.elasticsearch.document_store.ElasticsearchDocumentStore",
+        "init_parameters": {
+            "hosts": "some hosts",
+            "custom_mapping": None,
+            "index": "default",
+            "api_key": "my_api_key",
+            "api_key_id": "my_api_key_id",
+            "embedding_similarity_function": "cosine",
+        },
+    }
+
+    document_store = ElasticsearchDocumentStore.from_dict(data)
+    assert document_store._sparse_vector_field is None
+
+
+def test_api_key_validation_only_api_key():
     api_key = Secret.from_token("test_api_key")
-
     document_store = ElasticsearchDocumentStore(hosts="https://localhost:9200", api_key=api_key)
-    document_store.client()
     assert document_store._api_key == api_key
-    # not passing the api_key_id makes it default to reading from env var
     assert document_store._api_key_id == Secret.from_env_var("ELASTIC_API_KEY_ID", strict=False)
 
 
 @patch("haystack_integrations.document_stores.elasticsearch.document_store.Elasticsearch")
+@patch.dict("os.environ", {"ELASTIC_API_KEY": "", "ELASTIC_API_KEY_ID": ""})
 def test_api_key_validation_only_api_key_id_raises_error(_mock_elasticsearch_client):
     api_key_id = Secret.from_token("test_api_key_id")
     with pytest.raises(ValueError, match="api_key_id is provided but api_key is missing"):
@@ -192,7 +274,7 @@ def test_client_initialization_with_api_key_tuple(_mock_async_es, _mock_es):
 @patch("haystack_integrations.document_stores.elasticsearch.document_store.Elasticsearch")
 @patch("haystack_integrations.document_stores.elasticsearch.document_store.AsyncElasticsearch")
 def test_client_initialization_with_api_key_string(_mock_async_es, _mock_es):
-    api_key = Secret.from_token("test_api_key")
+    api_key = "test_api_key"
 
     # Mock the client.info() call to avoid actual connection
     mock_client = Mock()
@@ -217,10 +299,255 @@ def test_client_initialization_with_api_key_string(_mock_async_es, _mock_es):
     assert async_call_args[1]["api_key"] == "test_api_key"
 
 
+@patch("haystack_integrations.document_stores.elasticsearch.document_store.Elasticsearch")
+def test_init_with_custom_mapping(mock_elasticsearch):
+    custom_mapping = {
+        "properties": {
+            "embedding": {"type": "dense_vector", "index": True, "similarity": "dot_product"},
+            "content": {"type": "text"},
+        },
+        "dynamic_templates": [
+            {
+                "strings": {
+                    "path_match": "*",
+                    "match_mapping_type": "string",
+                    "mapping": {
+                        "type": "keyword",
+                    },
+                }
+            }
+        ],
+    }
+    mock_client = Mock(
+        indices=Mock(create=Mock(), exists=Mock(return_value=False)),
+    )
+    mock_elasticsearch.return_value = mock_client
+
+    _ = ElasticsearchDocumentStore(hosts="http://testhost:9200", custom_mapping=custom_mapping).client
+    mock_client.indices.create.assert_called_once_with(
+        index="default",
+        mappings=custom_mapping,
+    )
+
+
+def test_sparse_embedding_to_es_vector_mismatched_lengths():
+    with pytest.raises(ValueError):
+        ElasticsearchDocumentStore._sparse_embedding_to_es_vector(indices=[0, 1, 2], values=[0.5, 0.7])
+
+
+def test_sparse_embedding_to_es_vector_empty_inputs():
+    with pytest.raises(ValueError, match="non-empty"):
+        ElasticsearchDocumentStore._sparse_embedding_to_es_vector(indices=[], values=[])
+
+
+def test_deserialize_document_with_numeric_string_keys():
+    # Documents written by Haystack use numeric string keys ("0", "1", ...)
+    store = ElasticsearchDocumentStore(hosts="testhost", sparse_vector_field="sparse_vec")
+    hit = {
+        "_source": {"id": "doc-1", "content": "Berlin", "sparse_vec": {"0": 0.9, "2": 0.5, "1": 0.7}},
+        "_score": 1.0,
+    }
+    doc = store._deserialize_document(hit)
+    assert doc.sparse_embedding is not None
+    assert doc.sparse_embedding.indices == [0, 1, 2]
+    assert doc.sparse_embedding.values == [0.9, 0.7, 0.5]
+
+
+def test_deserialize_document_with_elser_string_token_keys():
+    # Documents indexed by an ES inference pipeline (ELSER) use token-string keys ("berlin", ...)
+    # which cannot map to integer indices — sparse_embedding is left as None
+    store = ElasticsearchDocumentStore(hosts="testhost", sparse_vector_field="sparse_vec")
+    hit = {
+        "_source": {"id": "doc-1", "content": "Berlin", "sparse_vec": {"berlin": 3.5, "capital": 2.1}},
+        "_score": 1.0,
+    }
+    doc = store._deserialize_document(hit)
+    assert doc.content == "Berlin"
+    assert doc.score == 1.0
+    assert doc.sparse_embedding is None
+
+
+def test_sparse_vector_retrieval_builds_query_without_filters():
+    store = ElasticsearchDocumentStore(hosts="some hosts", sparse_vector_field="sparse_vec")
+
+    with patch.object(store, "_search_documents", return_value=[]) as mock_search:
+        store._sparse_vector_retrieval(
+            query_sparse_embedding=SparseEmbedding(indices=[0, 2], values=[0.5, 0.7]),
+            top_k=3,
+        )
+
+    mock_search.assert_called_once()
+    search_kwargs = mock_search.call_args.kwargs
+    assert search_kwargs["size"] == 3
+    assert search_kwargs["query"]["bool"]["must"] == [
+        {"sparse_vector": {"field": "sparse_vec", "query_vector": {"0": 0.5, "2": 0.7}}}
+    ]
+    assert "filter" not in search_kwargs["query"]["bool"]
+
+
+def test_sparse_vector_retrieval_inference_builds_query_without_filters():
+    store = ElasticsearchDocumentStore(hosts="some hosts", sparse_vector_field="sparse_vec")
+
+    with patch.object(store, "_search_documents", return_value=[]) as mock_search:
+        store._sparse_vector_retrieval_inference(query="Find Berlin", inference_id="ELSER", top_k=3)
+
+    mock_search.assert_called_once()
+    search_kwargs = mock_search.call_args.kwargs
+    assert search_kwargs["size"] == 3
+    assert search_kwargs["query"]["bool"]["must"] == [
+        {"sparse_vector": {"field": "sparse_vec", "query": "Find Berlin", "inference_id": "ELSER"}}
+    ]
+    assert "filter" not in search_kwargs["query"]["bool"]
+
+
+def test_sparse_vector_retrieval_inference_builds_query_with_filters():
+    store = ElasticsearchDocumentStore(hosts="some hosts", sparse_vector_field="sparse_vec")
+
+    with patch.object(store, "_search_documents", return_value=[]) as mock_search:
+        store._sparse_vector_retrieval_inference(
+            query="Find Berlin",
+            inference_id="ELSER",
+            filters={"field": "type", "operator": "==", "value": "match"},
+            top_k=3,
+        )
+
+    mock_search.assert_called_once()
+    search_kwargs = mock_search.call_args.kwargs
+    assert search_kwargs["size"] == 3
+    assert search_kwargs["query"]["bool"]["must"] == [
+        {"sparse_vector": {"field": "sparse_vec", "query": "Find Berlin", "inference_id": "ELSER"}}
+    ]
+    assert search_kwargs["query"]["bool"]["filter"] == {"bool": {"must": {"term": {"type": "match"}}}}
+
+
+def test_sparse_vector_retrieval_builds_query_with_filters():
+    store = ElasticsearchDocumentStore(hosts="some hosts", sparse_vector_field="sparse_vec")
+
+    with patch.object(store, "_search_documents", return_value=[]) as mock_search:
+        store._sparse_vector_retrieval(
+            query_sparse_embedding=SparseEmbedding(indices=[0, 2], values=[0.5, 0.7]),
+            filters={"field": "type", "operator": "==", "value": "match"},
+            top_k=3,
+        )
+
+    mock_search.assert_called_once()
+    search_kwargs = mock_search.call_args.kwargs
+    assert search_kwargs["size"] == 3
+    assert search_kwargs["query"]["bool"]["must"] == [
+        {"sparse_vector": {"field": "sparse_vec", "query_vector": {"0": 0.5, "2": 0.7}}}
+    ]
+    assert search_kwargs["query"]["bool"]["filter"] == {"bool": {"must": {"term": {"type": "match"}}}}
+
+
+@pytest.mark.asyncio
+async def test_sparse_vector_retrieval_async_builds_query_without_filters():
+    store = ElasticsearchDocumentStore(hosts="some hosts", sparse_vector_field="sparse_vec")
+    store._initialized = True
+    store._search_documents_async = AsyncMock(return_value=[])  # type: ignore[method-assign]
+
+    await store._sparse_vector_retrieval_async(
+        query_sparse_embedding=SparseEmbedding(indices=[1, 3], values=[0.4, 0.9]),
+        top_k=2,
+    )
+
+    store._search_documents_async.assert_awaited_once_with(  # type: ignore[attr-defined]
+        size=2,
+        query={
+            "bool": {
+                "must": [
+                    {"sparse_vector": {"field": "sparse_vec", "query_vector": {"1": 0.4, "3": 0.9}}},
+                ]
+            }
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_sparse_vector_retrieval_inference_async_builds_query_without_filters():
+    store = ElasticsearchDocumentStore(hosts="some hosts", sparse_vector_field="sparse_vec")
+    store._initialized = True
+    store._search_documents_async = AsyncMock(return_value=[])  # type: ignore[method-assign]
+
+    await store._sparse_vector_retrieval_inference_async(
+        query="Find Berlin",
+        inference_id="ELSER",
+        top_k=2,
+    )
+
+    store._search_documents_async.assert_awaited_once_with(  # type: ignore[attr-defined]
+        size=2,
+        query={
+            "bool": {
+                "must": [
+                    {"sparse_vector": {"field": "sparse_vec", "query": "Find Berlin", "inference_id": "ELSER"}},
+                ]
+            }
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_sparse_vector_retrieval_inference_async_builds_query_with_filters():
+    store = ElasticsearchDocumentStore(hosts="some hosts", sparse_vector_field="sparse_vec")
+    store._initialized = True
+    store._search_documents_async = AsyncMock(return_value=[])  # type: ignore[method-assign]
+
+    await store._sparse_vector_retrieval_inference_async(
+        query="Find Berlin",
+        inference_id="ELSER",
+        filters={"field": "type", "operator": "==", "value": "match"},
+        top_k=3,
+    )
+
+    store._search_documents_async.assert_awaited_once_with(  # type: ignore[attr-defined]
+        size=3,
+        query={
+            "bool": {
+                "must": [
+                    {"sparse_vector": {"field": "sparse_vec", "query": "Find Berlin", "inference_id": "ELSER"}},
+                ],
+                "filter": {"bool": {"must": {"term": {"type": "match"}}}},
+            }
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_sparse_vector_retrieval_async_builds_query_with_filters():
+    store = ElasticsearchDocumentStore(hosts="some hosts", sparse_vector_field="sparse_vec")
+    store._initialized = True
+    store._search_documents_async = AsyncMock(return_value=[])  # type: ignore[method-assign]
+
+    await store._sparse_vector_retrieval_async(
+        query_sparse_embedding=SparseEmbedding(indices=[1, 3], values=[0.4, 0.9]),
+        filters={"field": "type", "operator": "==", "value": "match"},
+        top_k=2,
+    )
+
+    store._search_documents_async.assert_awaited_once_with(  # type: ignore[attr-defined]
+        size=2,
+        query={
+            "bool": {
+                "must": [
+                    {"sparse_vector": {"field": "sparse_vec", "query_vector": {"1": 0.4, "3": 0.9}}},
+                ],
+                "filter": {"bool": {"must": {"term": {"type": "match"}}}},
+            }
+        },
+    )
+
+
 @pytest.mark.integration
-class TestDocumentStore(DocumentStoreBaseTests):
+class TestDocumentStore(
+    DocumentStoreBaseExtendedTests,
+    CountDocumentsByFilterTest,
+    CountUniqueMetadataByFilterTest,
+    GetMetadataFieldsInfoTest,
+    GetMetadataFieldMinMaxTest,
+    GetMetadataFieldUniqueValuesTest,
+):
     """
-    Common test cases will be provided by `DocumentStoreBaseTests` but
+    Common test cases will be provided by `DocumentStoreBaseExtendedTests` but
     you can add more to this class.
     """
 
@@ -245,7 +572,7 @@ class TestDocumentStore(DocumentStoreBaseTests):
         store.client.options(ignore_status=[400, 404]).indices.delete(index=index)
         store.client.close()
 
-    def assert_documents_are_equal(self, received: List[Document], expected: List[Document]):
+    def assert_documents_are_equal(self, received: list[Document], expected: list[Document]):
         """
         The ElasticSearchDocumentStore.filter_documents() method returns a Documents with their score set.
         We don't want to compare the score, so we set it to None before comparing the documents.
@@ -265,8 +592,7 @@ class TestDocumentStore(DocumentStoreBaseTests):
                 "name": doc.meta.get("name"),
             }
             expected_meta.append(r)
-        for doc in received:
-            doc.score = None
+        received = [dataclasses.replace(doc, score=None) for doc in received]
 
         super().assert_documents_are_equal(received, expected)
 
@@ -278,6 +604,81 @@ class TestDocumentStore(DocumentStoreBaseTests):
         assert document_store.write_documents(docs) == 1
         with pytest.raises(DuplicateDocumentError):
             document_store.write_documents(docs, DuplicatePolicy.FAIL)
+
+    def test_write_documents_with_sparse_vectors(self):
+        store = ElasticsearchDocumentStore(
+            hosts=["http://localhost:9200"], index="test_sync_sparse", sparse_vector_field="sparse_vec"
+        )
+        store.client.options(ignore_status=[400, 404]).indices.delete(index="test_sync_sparse")
+
+        doc = Document(id="1", content="test", sparse_embedding=SparseEmbedding(indices=[0, 1], values=[0.5, 0.5]))
+        store.write_documents([doc])
+
+        # check ES natively
+        raw_doc = store.client.get(index="test_sync_sparse", id="1")
+        assert raw_doc["_source"]["sparse_vec"] == {"0": 0.5, "1": 0.5}
+
+        # check retrieval reconstruction
+        results = store.filter_documents()
+        assert len(results) == 1
+        assert results[0].sparse_embedding is not None
+        assert results[0].sparse_embedding.indices == [0, 1]
+        assert results[0].sparse_embedding.values == [0.5, 0.5]
+
+        store.client.indices.delete(index="test_sync_sparse")
+
+    def test_write_documents_with_non_contiguous_sparse_indices(self):
+        store = ElasticsearchDocumentStore(
+            hosts=["http://localhost:9200"], index="test_sync_sparse_noncontiguous", sparse_vector_field="sparse_vec"
+        )
+        store.client.options(ignore_status=[400, 404]).indices.delete(index="test_sync_sparse_noncontiguous")
+
+        doc = Document(
+            id="1", content="test", sparse_embedding=SparseEmbedding(indices=[100, 5, 42], values=[0.1, 0.9, 0.5])
+        )
+        store.write_documents([doc])
+
+        results = store.filter_documents()
+        assert len(results) == 1
+        assert results[0].sparse_embedding is not None
+        assert results[0].sparse_embedding.indices == [5, 42, 100]
+        assert results[0].sparse_embedding.values == [0.9, 0.5, 0.1]
+
+        store.client.indices.delete(index="test_sync_sparse_noncontiguous")
+
+    def test_write_documents_mixed_sparse_and_non_sparse(self):
+        store = ElasticsearchDocumentStore(
+            hosts=["http://localhost:9200"], index="test_sync_sparse_mixed", sparse_vector_field="sparse_vec"
+        )
+        store.client.options(ignore_status=[400, 404]).indices.delete(index="test_sync_sparse_mixed")
+
+        docs = [
+            Document(
+                id="1", content="with sparse", sparse_embedding=SparseEmbedding(indices=[0, 1], values=[0.5, 0.5])
+            ),
+            Document(id="2", content="without sparse"),
+        ]
+        store.write_documents(docs)
+
+        results = sorted(store.filter_documents(), key=lambda d: d.id)
+        assert len(results) == 2
+        assert results[0].sparse_embedding is not None
+        assert results[0].sparse_embedding.indices == [0, 1]
+        assert results[1].sparse_embedding is None
+
+        store.client.indices.delete(index="test_sync_sparse_mixed")
+
+    def test_write_documents_with_sparse_embedding_warning(self, document_store, caplog):
+        """Test write_documents with document containing sparse_embedding field"""
+        doc = Document(id="1", content="test", sparse_embedding=SparseEmbedding(indices=[0, 1], values=[0.5, 0.5]))
+
+        document_store.write_documents([doc])
+        assert "but `sparse_vector_field` is not configured" in caplog.text
+
+        results = document_store.filter_documents()
+        assert len(results) == 1
+        assert results[0].id == "1"
+        assert not hasattr(results[0], "sparse_embedding") or results[0].sparse_embedding is None
 
     def test_bm25_retrieval(self, document_store: ElasticsearchDocumentStore):
         document_store.write_documents(
@@ -442,6 +843,12 @@ class TestDocumentStore(DocumentStoreBaseTests):
         with pytest.raises(BadRequestError):
             document_store._embedding_retrieval(query_embedding=[0.1, 0.1])
 
+    def test_sparse_vector_retrieval_requires_sparse_vector_field(self, document_store: ElasticsearchDocumentStore):
+        with pytest.raises(ValueError, match="sparse_vector_field must be set for sparse vector retrieval"):
+            document_store._sparse_vector_retrieval(
+                query_sparse_embedding=SparseEmbedding(indices=[0, 1], values=[1.0, 1.0])
+            )
+
     def test_write_documents_different_embedding_sizes_fail(self, document_store: ElasticsearchDocumentStore):
         """
         Test that write_documents fails if the documents have different embedding sizes.
@@ -453,6 +860,13 @@ class TestDocumentStore(DocumentStoreBaseTests):
 
         with pytest.raises(DocumentStoreError):
             document_store.write_documents(docs)
+
+    def test_init_with_sparse_vector_field(self):
+        store = ElasticsearchDocumentStore(
+            hosts=["http://localhost:9200"], index="test_init_sparse", sparse_vector_field="sparse_vec"
+        )
+        assert "sparse_vec" in store._default_mappings["properties"]
+        assert store._default_mappings["properties"]["sparse_vec"]["type"] == "sparse_vector"
 
     @patch("haystack_integrations.document_stores.elasticsearch.document_store.Elasticsearch")
     def test_init_with_custom_mapping(self, mock_elasticsearch):
@@ -520,244 +934,164 @@ class TestDocumentStore(DocumentStoreBaseTests):
         assert len(results) == 1
         assert results[0].content == "New document after delete all"
 
-    def test_delete_all_documents_no_index_recreation(self, document_store: ElasticsearchDocumentStore):
-        docs = [Document(id="1", content="A first document"), Document(id="2", content="Second document")]
+    def test_count_unique_metadata_by_filter(self, document_store: ElasticsearchDocumentStore):
+        docs = [
+            Document(content="Doc 1", meta={"category": "A", "status": "active", "priority": 1}),
+            Document(content="Doc 2", meta={"category": "B", "status": "active", "priority": 2}),
+            Document(content="Doc 3", meta={"category": "A", "status": "inactive", "priority": 1}),
+            Document(content="Doc 4", meta={"category": "A", "status": "active", "priority": 3}),
+            Document(content="Doc 5", meta={"category": "C", "status": "active", "priority": 2}),
+        ]
         document_store.write_documents(docs)
-        assert document_store.count_documents() == 2
 
-        document_store.delete_all_documents(recreate_index=False)
-        time.sleep(2)  # need to wait for the deletion to be reflected in count_documents
-        assert document_store.count_documents() == 0
-
-        new_doc = Document(id="3", content="New document after delete all")
-        document_store.write_documents([new_doc])
-        assert document_store.count_documents() == 1
-
-        results = document_store.filter_documents()
-        assert len(results) == 1
-        assert results[0].content == "New document after delete all"
-
-
-@pytest.mark.integration
-class TestElasticsearchDocumentStoreAsync:
-    @pytest.fixture
-    async def document_store(self, request):
-        """
-        Basic fixture providing a document store instance for async tests
-        """
-        hosts = ["http://localhost:9200"]
-        # Use a different index for each test so we can run them in parallel
-        index = f"{request.node.name}"
-
-        store = ElasticsearchDocumentStore(hosts=hosts, index=index)
-        yield store
-        store.client.options(ignore_status=[400, 404]).indices.delete(index=index)
-
-        await store.async_client.close()
-
-    @pytest.mark.asyncio
-    async def test_write_documents_async(self, document_store):
-        docs = [Document(id="1", content="test")]
-        assert await document_store.write_documents_async(docs) == 1
-        assert await document_store.count_documents_async() == 1
-        with pytest.raises(DocumentStoreError):
-            await document_store.write_documents_async(docs, policy=DuplicatePolicy.FAIL)
-
-    @pytest.mark.asyncio
-    async def test_count_documents_async(self, document_store):
-        docs = [
-            Document(content="test doc 1"),
-            Document(content="test doc 2"),
-            Document(content="test doc 3"),
-        ]
-        await document_store.write_documents_async(docs)
-        assert await document_store.count_documents_async() == 3
-
-    @pytest.mark.asyncio
-    async def test_delete_documents_async(self, document_store):
-        doc = Document(content="test doc")
-        await document_store.write_documents_async([doc])
-        assert await document_store.count_documents_async() == 1
-        await document_store.delete_documents_async([doc.id])
-        assert await document_store.count_documents_async() == 0
-
-    @pytest.mark.asyncio
-    async def test_filter_documents_async(self, document_store):
-        filterable_docs = [
-            Document(content="1", meta={"number": -10}),
-            Document(content="2", meta={"number": 100}),
-        ]
-        await document_store.write_documents_async(filterable_docs)
-        result = await document_store.filter_documents_async(
-            filters={"field": "number", "operator": "==", "value": 100}
+        # test with only a subset of fields
+        distinct_counts_subset = document_store.count_unique_metadata_by_filter(
+            filters={}, metadata_fields=["category", "status"]
         )
-        assert len(result) == 1
-        assert result[0].meta["number"] == 100
+        assert distinct_counts_subset["category"] == 3
+        assert distinct_counts_subset["status"] == 2
+        assert "priority" not in distinct_counts_subset
 
-    @pytest.mark.asyncio
-    async def test_bm25_retrieval_async(self, document_store):
-        docs = [
-            Document(content="Haskell is a functional programming language"),
-            Document(content="Python is an object oriented programming language"),
-        ]
-        await document_store.write_documents_async(docs)
-        results = await document_store._bm25_retrieval_async("functional", top_k=1)
-        assert len(results) == 1
-        assert "functional" in results[0].content
-
-    @pytest.mark.asyncio
-    async def test_embedding_retrieval_async(self, document_store):
-        # init document store
-        docs = [
-            Document(content="Most similar document", embedding=[1.0, 1.0, 1.0, 1.0]),
-            Document(content="Less similar document", embedding=[0.5, 0.5, 0.5, 0.5]),
-        ]
-        await document_store.write_documents_async(docs)
-
-        # without num_candidates set to None
-        results = await document_store._embedding_retrieval_async(query_embedding=[1.0, 1.0, 1.0, 1.0], top_k=1)
-        assert len(results) == 1
-        assert results[0].content == "Most similar document"
-
-        # with num_candidates not None
-        results = await document_store._embedding_retrieval_async(
-            query_embedding=[1.0, 1.0, 1.0, 1.0], top_k=2, num_candidates=2
+        # test field name normalization (with "meta." prefix)
+        distinct_counts_normalized = document_store.count_unique_metadata_by_filter(
+            filters={}, metadata_fields=["meta.category", "status", "meta.priority"]
         )
-        assert len(results) == 2
-        assert results[0].content == "Most similar document"
+        assert distinct_counts_normalized["category"] == 3
+        assert distinct_counts_normalized["status"] == 2
+        assert distinct_counts_normalized["priority"] == 3
 
-        # with an embedding containing None
-        with pytest.raises(ValueError, match="query_embedding must be a non-empty list of floats"):
-            _ = await document_store._embedding_retrieval_async(query_embedding=None, top_k=2)
+        # Test error handling when field doesn't exist
+        with pytest.raises(ValueError, match="Fields not found in index mapping"):
+            document_store.count_unique_metadata_by_filter(filters={}, metadata_fields=["nonexistent_field"])
 
-    @pytest.mark.asyncio
-    async def test_bm25_retrieval_async_with_filters(self, document_store):
+    def test_get_metadata_fields_info(self, document_store: ElasticsearchDocumentStore):
         docs = [
-            Document(content="Haskell is a functional programming language", meta={"type": "functional"}),
-            Document(content="Python is an object oriented programming language", meta={"type": "oop"}),
+            Document(content="Doc 1", meta={"category": "A", "status": "active", "priority": 1}),
+            Document(content="Doc 2", meta={"category": "B", "status": "inactive"}),
         ]
-        await document_store.write_documents_async(docs)
-        results = await document_store._bm25_retrieval_async(
-            "programming", filters={"field": "type", "operator": "==", "value": "functional"}, top_k=1
-        )
-        assert len(results) == 1
-        assert "functional" in results[0].content
+        document_store.write_documents(docs)
 
-        # test with scale_score=True
-        results = await document_store._bm25_retrieval_async(
-            "programming", filters={"field": "type", "operator": "==", "value": "functional"}, top_k=1, scale_score=True
-        )
-        assert len(results) == 1
-        assert "functional" in results[0].content
-        assert 0 <= results[0].score <= 1  # score should be between 0 and 1
+        fields_info = document_store.get_metadata_fields_info()
 
-    @pytest.mark.asyncio
-    async def test_embedding_retrieval_async_with_filters(self, document_store):
+        # verify that fields_info contains expected fields
+        assert "category" in fields_info
+        assert "status" in fields_info
+        assert "priority" in fields_info
+
+        assert fields_info["category"]["type"] == "keyword"
+        assert fields_info["status"]["type"] == "keyword"
+        assert fields_info["priority"]["type"] == "long"
+
+    def test_get_metadata_field_unique_values(self, document_store: ElasticsearchDocumentStore):
         docs = [
-            Document(content="Most similar document", embedding=[1.0, 1.0, 1.0, 1.0], meta={"type": "similar"}),
-            Document(content="Less similar document", embedding=[0.5, 0.5, 0.5, 0.5], meta={"type": "different"}),
+            Document(content="Python programming", meta={"category": "A", "language": "Python"}),
+            Document(content="Java programming", meta={"category": "B", "language": "Java"}),
+            Document(content="Python scripting", meta={"category": "A", "language": "Python"}),
+            Document(content="JavaScript development", meta={"category": "C", "language": "JavaScript"}),
+            Document(content="Python data science", meta={"category": "A", "language": "Python"}),
+            Document(content="Java backend", meta={"category": "B", "language": "Java"}),
         ]
-        await document_store.write_documents_async(docs)
-        results = await document_store._embedding_retrieval_async(
-            query_embedding=[1.0, 1.0, 1.0, 1.0],
-            filters={"field": "type", "operator": "==", "value": "similar"},
-            top_k=1,
+        document_store.write_documents(docs)
+
+        # test getting all unique values without search term
+        unique_values, after_key = document_store.get_metadata_field_unique_values("meta.category", None, 10)
+        assert set(unique_values) == {"A", "B", "C"}
+        # after_key should be None when all results are returned
+        assert after_key is None
+
+        # Test with "meta." prefix
+        unique_languages, _ = document_store.get_metadata_field_unique_values("meta.language", None, 10)
+        assert set(unique_languages) == {"Python", "Java", "JavaScript"}
+
+        # Test pagination - first page
+        unique_values_page1, after_key_page1 = document_store.get_metadata_field_unique_values("meta.category", None, 2)
+        assert len(unique_values_page1) == 2
+        assert all(val in ["A", "B", "C"] for val in unique_values_page1)
+        # Should have an after_key for pagination
+        assert after_key_page1 is not None
+
+        # Test pagination - second page using after_key
+        unique_values_page2, after_key_page2 = document_store.get_metadata_field_unique_values(
+            "meta.category", None, 2, after=after_key_page1
         )
-        assert len(results) == 1
-        assert results[0].content == "Most similar document"
+        assert len(unique_values_page2) == 1
+        assert unique_values_page2[0] in ["A", "B", "C"]
+        # Should have no more results
+        assert after_key_page2 is None
 
-    @pytest.mark.asyncio
-    async def test_write_documents_async_invalid_document_type(self, document_store):
-        """Test write_documents with invalid document type"""
-        invalid_docs = [{"id": "1", "content": "test"}]  # Dictionary instead of Document object
-        with pytest.raises(ValueError, match="param 'documents' must contain a list of objects of type Document"):
-            await document_store.write_documents_async(invalid_docs)
+        # Test with search term - filter by content matching "Python"
+        unique_values_filtered, _ = document_store.get_metadata_field_unique_values("meta.category", "Python", 10)
+        assert set(unique_values_filtered) == {"A"}  # Only category A has documents with "Python" in content
 
-    @pytest.mark.asyncio
-    async def test_write_documents_async_with_sparse_embedding_warning(self, document_store, caplog):
-        """Test write_documents with document containing sparse_embedding field"""
-        doc = Document(id="1", content="test", sparse_embedding=SparseEmbedding(indices=[0, 1], values=[0.5, 0.5]))
+        # Test with search term - filter by content matching "Java"
+        unique_values_java, _ = document_store.get_metadata_field_unique_values("meta.category", "Java", 10)
+        assert set(unique_values_java) == {"B"}  # Only category B has documents with "Java" in content
 
-        await document_store.write_documents_async([doc])
-        assert "but storing sparse embeddings in Elasticsearch is not currently supported." in caplog.text
-
-        results = await document_store.filter_documents_async()
-        assert len(results) == 1
-        assert results[0].id == "1"
-        assert not hasattr(results[0], "sparse_embedding") or results[0].sparse_embedding is None
-
-    @pytest.mark.asyncio
-    async def test_delete_all_documents_async(self, document_store):
-        docs = [
-            Document(id="1", content="First document", meta={"category": "test"}),
-            Document(id="2", content="Second document", meta={"category": "test"}),
-            Document(id="3", content="Third document", meta={"category": "other"}),
+        # Test with integer values
+        int_docs = [
+            Document(content="Doc 1", meta={"priority": 1}),
+            Document(content="Doc 2", meta={"priority": 2}),
+            Document(content="Doc 3", meta={"priority": 1}),
+            Document(content="Doc 4", meta={"priority": 3}),
         ]
-        await document_store.write_documents_async(docs)
-        assert await document_store.count_documents_async() == 3
+        document_store.write_documents(int_docs)
+        unique_priorities, _ = document_store.get_metadata_field_unique_values("meta.priority", None, 10)
+        assert set(unique_priorities) == {"1", "2", "3"}
 
-        # delete all documents
-        await document_store.delete_all_documents_async(recreate_index=False)
-        assert await document_store.count_documents_async() == 0
+        # Test with search term on integer field
+        unique_priorities_filtered, _ = document_store.get_metadata_field_unique_values("meta.priority", "Doc 1", 10)
+        assert set(unique_priorities_filtered) == {"1"}
 
-        # verify index still exists and can accept new documents and retrieve
-        new_doc = Document(id="4", content="New document after delete all")
-        await document_store.write_documents_async([new_doc])
-        assert await document_store.count_documents_async() == 1
+    def test_query_sql(self, document_store: ElasticsearchDocumentStore):
+        docs = [
+            Document(content="Python programming", meta={"category": "A", "status": "active", "priority": 1}),
+            Document(content="Java programming", meta={"category": "B", "status": "active", "priority": 2}),
+            Document(content="Python scripting", meta={"category": "A", "status": "inactive", "priority": 3}),
+            Document(content="JavaScript development", meta={"category": "C", "status": "active", "priority": 1}),
+        ]
+        document_store.write_documents(docs)
 
-        results = await document_store.filter_documents_async()
-        assert len(results) == 1
-        assert results[0].id == "4"
-        assert results[0].content == "New document after delete all"
+        # SQL query returns raw JSON response from Elasticsearch SQL API
+        sql_query = (
+            f'SELECT content, category, status, priority FROM "{document_store._index}" '  # noqa: S608
+            f"WHERE category = 'A' ORDER BY priority"
+        )
+        result = document_store._query_sql(sql_query)
 
-    @pytest.mark.asyncio
-    async def test_delete_all_documents_async_index_recreation(self, document_store):
-        # populate the index with some documents
-        docs = [Document(id="1", content="A first document"), Document(id="2", content="Second document")]
-        await document_store.write_documents_async(docs)
+        # Verify raw JSON response structure
+        assert isinstance(result, dict)
+        assert "columns" in result
+        assert "rows" in result
 
-        # capture index structure before deletion
-        assert document_store._async_client is not None
-        index_info_before = await document_store._async_client.indices.get(index=document_store._index)
-        mappings_before = index_info_before[document_store._index]["mappings"]
-        settings_before = index_info_before[document_store._index]["settings"]
+        # Verify we got 2 rows (documents with category A)
+        assert len(result["rows"]) == 2
 
-        # delete all documents with index recreation
-        await document_store.delete_all_documents_async(recreate_index=True)
-        assert await document_store.count_documents_async() == 0
+        # Verify column structure
+        column_names = [col["name"] for col in result["columns"]]
+        assert "content" in column_names
+        assert "category" in column_names
 
-        # verify index structure is preserved
-        index_info_after = await document_store._async_client.indices.get(index=document_store._index)
-        mappings_after = index_info_after[document_store._index]["mappings"]
-        assert mappings_after == mappings_before, "delete_all_documents_async should preserve index mappings"
+    def test_query_sql_with_fetch_size(self, document_store: ElasticsearchDocumentStore):
+        """Test SQL query with fetch_size parameter"""
+        docs = [Document(content=f"Document {i}", meta={"category": "A", "index": i}) for i in range(15)]
+        document_store.write_documents(docs)
 
-        settings_after = index_info_after[document_store._index]["settings"]
-        settings_after["index"].pop("uuid", None)
-        settings_after["index"].pop("creation_date", None)
-        settings_before["index"].pop("uuid", None)
-        settings_before["index"].pop("creation_date", None)
-        assert settings_after == settings_before, "delete_all_documents_async should preserve index settings"
+        sql_query = (
+            f'SELECT content, category FROM "{document_store._index}" '  # noqa: S608
+            f"WHERE category = 'A'"
+        )
 
-        # verify index can accept new documents and retrieve
-        new_doc = Document(id="4", content="New document after delete all")
-        await document_store.write_documents_async([new_doc])
-        assert await document_store.count_documents_async() == 1
+        # Test with fetch_size
+        result = document_store._query_sql(sql_query, fetch_size=5)
 
-        results = await document_store.filter_documents_async()
-        assert len(results) == 1
-        assert results[0].content == "New document after delete all"
+        # Should return raw JSON response
+        assert isinstance(result, dict)
+        assert "columns" in result
+        assert "rows" in result
 
-    @pytest.mark.asyncio
-    async def test_delete_all_documents_async_no_index_recreation(self, document_store):
-        docs = [Document(id="1", content="A first document"), Document(id="2", content="Second document")]
-        await document_store.write_documents_async(docs)
-        assert await document_store.count_documents_async() == 2
+    def test_query_sql_error_handling(self, document_store: ElasticsearchDocumentStore):
+        """Test error handling for invalid SQL queries"""
 
-        await document_store.delete_all_documents_async(recreate_index=False)
-        # Need to wait for the deletion to be reflected in count_documents
-        time.sleep(2)
-        assert await document_store.count_documents_async() == 0
-
-        new_doc = Document(id="3", content="New document after delete all")
-        await document_store.write_documents_async([new_doc])
-        assert await document_store.count_documents_async() == 1
+        invalid_query = "SELECT * FROM non_existent_index"
+        with pytest.raises(DocumentStoreError, match="Failed to execute SQL query"):
+            document_store._query_sql(invalid_query)

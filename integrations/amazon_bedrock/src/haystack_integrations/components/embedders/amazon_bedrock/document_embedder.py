@@ -1,11 +1,12 @@
 import json
-from typing import Any, Dict, List, Literal, Optional
+from dataclasses import replace
+from typing import Any
 
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from haystack import component, default_from_dict, default_to_dict, logging
 from haystack.dataclasses import Document
-from haystack.utils.auth import Secret, deserialize_secrets_inplace
+from haystack.utils.auth import Secret
 from tqdm import tqdm
 
 from haystack_integrations.common.amazon_bedrock.errors import (
@@ -16,19 +17,12 @@ from haystack_integrations.common.amazon_bedrock.utils import get_aws_session
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EMBEDDING_MODELS = [
-    "amazon.titan-embed-text-v1",
-    "cohere.embed-english-v3",
-    "cohere.embed-multilingual-v3",
-    "amazon.titan-embed-text-v2:0",
-    "amazon.titan-embed-image-v1",
-]
-
 
 @component
 class AmazonBedrockDocumentEmbedder:
     """
     A component for computing Document embeddings using Amazon Bedrock.
+
     The embedding of each Document is stored in the `embedding` field of the Document.
 
     Usage example:
@@ -57,30 +51,25 @@ class AmazonBedrockDocumentEmbedder:
 
     def __init__(
         self,
-        model: Literal[
-            "amazon.titan-embed-text-v1",
-            "cohere.embed-english-v3",
-            "cohere.embed-multilingual-v3",
-            "amazon.titan-embed-text-v2:0",
-            "amazon.titan-embed-image-v1",
-        ],
-        aws_access_key_id: Optional[Secret] = Secret.from_env_var("AWS_ACCESS_KEY_ID", strict=False),  # noqa: B008
-        aws_secret_access_key: Optional[Secret] = Secret.from_env_var(  # noqa: B008
+        model: str,
+        aws_access_key_id: Secret | None = Secret.from_env_var("AWS_ACCESS_KEY_ID", strict=False),  # noqa: B008
+        aws_secret_access_key: Secret | None = Secret.from_env_var(  # noqa: B008
             "AWS_SECRET_ACCESS_KEY", strict=False
         ),
-        aws_session_token: Optional[Secret] = Secret.from_env_var("AWS_SESSION_TOKEN", strict=False),  # noqa: B008
-        aws_region_name: Optional[Secret] = Secret.from_env_var("AWS_DEFAULT_REGION", strict=False),  # noqa: B008
-        aws_profile_name: Optional[Secret] = Secret.from_env_var("AWS_PROFILE", strict=False),  # noqa: B008
+        aws_session_token: Secret | None = Secret.from_env_var("AWS_SESSION_TOKEN", strict=False),  # noqa: B008
+        aws_region_name: Secret | None = Secret.from_env_var("AWS_DEFAULT_REGION", strict=False),  # noqa: B008
+        aws_profile_name: Secret | None = Secret.from_env_var("AWS_PROFILE", strict=False),  # noqa: B008
         batch_size: int = 32,
         progress_bar: bool = True,
-        meta_fields_to_embed: Optional[List[str]] = None,
+        meta_fields_to_embed: list[str] | None = None,
         embedding_separator: str = "\n",
-        boto3_config: Optional[Dict[str, Any]] = None,
+        boto3_config: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         """
-        Initializes the AmazonBedrockDocumentEmbedder with the provided parameters. The parameters are passed to the
-        Amazon Bedrock client.
+        Initializes the AmazonBedrockDocumentEmbedder with the provided parameters.
+
+        The parameters are passed to the Amazon Bedrock client.
 
         Note that the AWS credentials are not required if the AWS environment is configured correctly. These are loaded
         automatically from the environment or the AWS configuration file and do not need to be provided explicitly via
@@ -88,8 +77,13 @@ class AmazonBedrockDocumentEmbedder:
         constructor. Aside from model, three required parameters are `aws_access_key_id`, `aws_secret_access_key`,
          and `aws_region_name`.
 
-        :param model: The embedding model to use. The model has to be specified in the format outlined in the Amazon
-            Bedrock [documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-ids.html).
+        :param model: The embedding model to use.
+            Amazon Titan and Cohere embedding models are supported, for example:
+            "amazon.titan-embed-text-v1", "amazon.titan-embed-text-v2:0", "amazon.titan-embed-image-v1",
+            "cohere.embed-english-v3", "cohere.embed-multilingual-v3", "cohere.embed-v4:0".
+            To find all supported models, refer to the Amazon Bedrock
+            [documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html) and
+            filter for "embedding", then select models from the Amazon Titan and Cohere series.
         :param aws_access_key_id: AWS access key ID.
         :param aws_secret_access_key: AWS secret access key.
         :param aws_session_token: AWS session token.
@@ -101,17 +95,16 @@ class AmazonBedrockDocumentEmbedder:
             to keep the logs clean.
         :param meta_fields_to_embed: List of meta fields that should be embedded along with the Document text.
         :param embedding_separator: Separator used to concatenate the meta fields to the Document text.
-        :param boto3_config: The configuration for the boto3 client.
+        :param boto3_config: Dictionary of configuration options for the underlying Boto3 client.
+            Can be used to tune [retry behavior](https://docs.aws.amazon.com/boto3/latest/guide/retries.html)
+            and other low-level settings like timeouts and connection management.
         :param kwargs: Additional parameters to pass for model inference. For example, `input_type` and `truncate` for
             Cohere models.
         :raises ValueError: If the model is not supported.
         :raises AmazonBedrockConfigurationError: If the AWS environment is not configured correctly.
         """
-
-        if not model or model not in SUPPORTED_EMBEDDING_MODELS:
-            msg = "Please provide a valid model from the list of supported models: " + ", ".join(
-                SUPPORTED_EMBEDDING_MODELS
-            )
+        if "titan" not in model and "cohere" not in model:
+            msg = f"Model {model} is not supported. Only Amazon Titan and Cohere embedding models are supported."
             raise ValueError(msg)
 
         self.model = model
@@ -127,7 +120,7 @@ class AmazonBedrockDocumentEmbedder:
         self.boto3_config = boto3_config
         self.kwargs = kwargs
 
-        def resolve_secret(secret: Optional[Secret]) -> Optional[str]:
+        def resolve_secret(secret: Secret | None) -> str | None:
             return secret.resolve_value() if secret else None
 
         try:
@@ -149,7 +142,7 @@ class AmazonBedrockDocumentEmbedder:
             )
             raise AmazonBedrockConfigurationError(msg) from exception
 
-    def _prepare_texts_to_embed(self, documents: List[Document]) -> List[str]:
+    def _prepare_texts_to_embed(self, documents: list[Document]) -> list[str]:
         """
         Prepare the texts to embed by concatenating the Document text with the metadata fields to embed.
         """
@@ -162,9 +155,10 @@ class AmazonBedrockDocumentEmbedder:
             texts_to_embed.append(text_to_embed)
         return texts_to_embed
 
-    def _embed_cohere(self, documents: List[Document]) -> List[Document]:
+    def _embed_cohere(self, documents: list[Document]) -> list[Document]:
         """
         Internal method to embed Documents using Cohere models.
+
         Batch inference is supported.
         """
 
@@ -191,17 +185,23 @@ class AmazonBedrockDocumentEmbedder:
                 msg = f"Could not perform inference for Amazon Bedrock model {self.model} due to:\n{exception}"
                 raise AmazonBedrockInferenceError(msg) from exception
 
-            response_body = json.loads(response.get("body").read())
-            all_embeddings.extend(response_body["embeddings"])
+            cohere_embeddings = json.loads(response.get("body").read())["embeddings"]
+            # depending on the model, Cohere returns a dict with the embedding types as keys or a list of lists
+            embeddings_list = (
+                next(iter(cohere_embeddings.values())) if isinstance(cohere_embeddings, dict) else cohere_embeddings
+            )
+            all_embeddings.extend(embeddings_list)
 
-        for doc, emb in zip(documents, all_embeddings):
-            doc.embedding = emb
+        new_documents = []
+        for doc, emb in zip(documents, all_embeddings, strict=True):
+            new_documents.append(replace(doc, embedding=emb))
 
-        return documents
+        return new_documents
 
-    def _embed_titan(self, documents: List[Document]) -> List[Document]:
+    def _embed_titan(self, documents: list[Document]) -> list[Document]:
         """
         Internal method to embed Documents using Amazon Titan models.
+
         NOTE: Batch inference is not supported, so embeddings are created one by one.
         """
 
@@ -222,14 +222,16 @@ class AmazonBedrockDocumentEmbedder:
             embedding = response_body["embedding"]
             all_embeddings.append(embedding)
 
-        for doc, emb in zip(documents, all_embeddings):
-            doc.embedding = emb
+        new_documents = []
+        for doc, emb in zip(documents, all_embeddings, strict=True):
+            new_documents.append(replace(doc, embedding=emb))
 
-        return documents
+        return new_documents
 
-    @component.output_types(documents=List[Document])
-    def run(self, documents: List[Document]) -> Dict[str, List[Document]]:
-        """Embed the provided `Document`s using the specified model.
+    @component.output_types(documents=list[Document])
+    def run(self, documents: list[Document]) -> dict[str, list[Document]]:
+        """
+        Embed the provided `Document`s using the specified model.
 
         :param documents: The `Document`s to embed.
         :returns: A dictionary with the following keys:
@@ -248,12 +250,12 @@ class AmazonBedrockDocumentEmbedder:
         elif "titan" in self.model:
             documents_with_embeddings = self._embed_titan(documents=documents)
         else:
-            msg = f"Model {self.model} is not supported. Supported models are: {', '.join(SUPPORTED_EMBEDDING_MODELS)}."
+            msg = f"Model {self.model} is not supported. Only Amazon Titan and Cohere embedding models are supported."
             raise ValueError(msg)
 
         return {"documents": documents_with_embeddings}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -262,11 +264,11 @@ class AmazonBedrockDocumentEmbedder:
         """
         return default_to_dict(
             self,
-            aws_access_key_id=self.aws_access_key_id.to_dict() if self.aws_access_key_id else None,
-            aws_secret_access_key=self.aws_secret_access_key.to_dict() if self.aws_secret_access_key else None,
-            aws_session_token=self.aws_session_token.to_dict() if self.aws_session_token else None,
-            aws_region_name=self.aws_region_name.to_dict() if self.aws_region_name else None,
-            aws_profile_name=self.aws_profile_name.to_dict() if self.aws_profile_name else None,
+            aws_access_key_id=self.aws_access_key_id,
+            aws_secret_access_key=self.aws_secret_access_key,
+            aws_session_token=self.aws_session_token,
+            aws_region_name=self.aws_region_name,
+            aws_profile_name=self.aws_profile_name,
             model=self.model,
             batch_size=self.batch_size,
             progress_bar=self.progress_bar,
@@ -277,7 +279,7 @@ class AmazonBedrockDocumentEmbedder:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AmazonBedrockDocumentEmbedder":
+    def from_dict(cls, data: dict[str, Any]) -> "AmazonBedrockDocumentEmbedder":
         """
         Deserializes the component from a dictionary.
 
@@ -286,8 +288,4 @@ class AmazonBedrockDocumentEmbedder:
         :returns:
             Deserialized component.
         """
-        deserialize_secrets_inplace(
-            data["init_parameters"],
-            ["aws_access_key_id", "aws_secret_access_key", "aws_session_token", "aws_region_name", "aws_profile_name"],
-        )
         return default_from_dict(cls, data)

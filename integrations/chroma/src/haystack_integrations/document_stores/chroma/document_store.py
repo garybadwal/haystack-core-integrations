@@ -3,15 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Sequence
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, cast
 
 import chromadb
 from chromadb.api.models.AsyncCollection import AsyncCollection
-from chromadb.api.types import GetResult, QueryResult
+from chromadb.api.types import GetResult, Metadata, OneOrMany, QueryResult
+from chromadb.config import Settings
 from haystack import default_from_dict, default_to_dict, logging
 from haystack.dataclasses import Document
 from haystack.document_stores.errors import DocumentStoreError
 from haystack.document_stores.types import DuplicatePolicy
+from haystack.utils.misc import _normalize_metadata_field_name
 
 from .filters import _convert_filters
 from .utils import get_embedding_function
@@ -20,7 +22,9 @@ logger = logging.getLogger(__name__)
 
 
 VALID_DISTANCE_FUNCTIONS = "l2", "cosine", "ip"
+# Supported ChromaDB metadata values can be found here: https://cookbook.chromadb.dev/core/concepts/#metadata
 SUPPORTED_TYPES_FOR_METADATA_VALUES = str, int, float, bool
+SUPPORTED_METADATA_VALUES_TYPE = str | int | float | bool
 
 
 class ChromaDocumentStore:
@@ -35,15 +39,17 @@ class ChromaDocumentStore:
         self,
         collection_name: str = "documents",
         embedding_function: str = "default",
-        persist_path: Optional[str] = None,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
+        persist_path: str | None = None,
+        host: str | None = None,
+        port: int | None = None,
         distance_function: Literal["l2", "cosine", "ip"] = "l2",
-        metadata: Optional[dict] = None,
+        metadata: dict | None = None,
+        client_settings: dict[str, Any] | None = None,
         **embedding_function_params: Any,
-    ):
+    ) -> None:
         """
         Creates a new ChromaDocumentStore instance.
+
         It is meant to be connected to a Chroma collection.
 
         Note: for the component to be part of a serializable pipeline, the __init__
@@ -67,6 +73,11 @@ class ChromaDocumentStore:
         :param metadata: a dictionary of chromadb collection parameters passed directly to chromadb's client
             method `create_collection`. If it contains the key `"hnsw:space"`, the value will take precedence over the
             `distance_function` parameter above.
+        :param client_settings: a dictionary of Chroma Settings configuration options passed to
+            `chromadb.config.Settings`. These settings configure the underlying Chroma client behavior.
+            For available options, see [Chroma's config.py](https://github.com/chroma-core/chroma/blob/main/chromadb/config.py).
+            **Note**: specifying these settings may interfere with standard client initialization parameters.
+            This option is intended for advanced customization.
         :param embedding_function_params: additional parameters to pass to the embedding function.
         """
 
@@ -84,15 +95,16 @@ class ChromaDocumentStore:
         self._embedding_function_params = embedding_function_params
         self._distance_function = distance_function
         self._metadata = metadata
+        self._client_settings = client_settings
 
         self._persist_path = persist_path
         self._host = host
         self._port = port
 
-        self._collection: Optional[chromadb.Collection] = None
-        self._async_collection: Optional[AsyncCollection] = None
+        self._collection: chromadb.Collection | None = None
+        self._async_collection: AsyncCollection | None = None
 
-    def _ensure_initialized(self):
+    def _ensure_initialized(self) -> None:
         if not self._collection:
             # Create the client instance
             if self._persist_path and (self._host or self._port is not None):
@@ -102,18 +114,29 @@ class ChromaDocumentStore:
                     "You cannot specify both options."
                 )
                 raise ValueError(error_message)
+
+            # Use dict to conditionally pass settings because Chroma doesn't accept settings=None
+            client_kwargs: dict[str, Any] = {}
+            if self._client_settings:
+                try:
+                    client_kwargs["settings"] = Settings(**self._client_settings)
+                except ValueError as e:
+                    msg = f"Invalid client_settings ({self._client_settings}): {e}"
+                    raise ValueError(msg) from e
+
             if self._host and self._port is not None:
                 # Remote connection via HTTP client
                 client = chromadb.HttpClient(
                     host=self._host,
                     port=self._port,
+                    **client_kwargs,
                 )
             elif self._persist_path is None:
                 # In-memory storage
-                client = chromadb.Client()
+                client = chromadb.Client(**client_kwargs)
             else:
                 # Local persistent storage
-                client = chromadb.PersistentClient(path=self._persist_path)
+                client = chromadb.PersistentClient(path=self._persist_path, **client_kwargs)
 
             self._client = client  # store client for potential future use
 
@@ -139,7 +162,7 @@ class ChromaDocumentStore:
                     embedding_function=self._embedding_func,
                 )
 
-    async def _ensure_initialized_async(self):
+    async def _ensure_initialized_async(self) -> None:
         if not self._async_collection:
             if self._host is None or self._port is None:
                 error_message = (
@@ -148,9 +171,19 @@ class ChromaDocumentStore:
                 )
                 raise ValueError(error_message)
 
+            # Use dict to conditionally pass settings because Chroma doesn't accept settings=None
+            client_kwargs: dict[str, Any] = {}
+            if self._client_settings:
+                try:
+                    client_kwargs["settings"] = Settings(**self._client_settings)
+                except ValueError as e:
+                    msg = f"Invalid client_settings ({self._client_settings}): {e}"
+                    raise ValueError(msg) from e
+
             client = await chromadb.AsyncHttpClient(
                 host=self._host,
                 port=self._port,
+                **client_kwargs,
             )
 
             self._async_client = client  # store client for potential future use
@@ -178,7 +211,8 @@ class ChromaDocumentStore:
                     embedding_function=self._embedding_func,
                 )
 
-    def _prepare_get_kwargs(self, filters: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    @staticmethod
+    def _prepare_get_kwargs(filters: dict[str, Any] | None = None) -> dict[str, Any]:
         """
         Prepare kwargs for Chroma get operations.
         """
@@ -195,7 +229,8 @@ class ChromaDocumentStore:
 
         return kwargs
 
-    def _prepare_query_kwargs(self, filters: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    @staticmethod
+    def _prepare_query_kwargs(filters: dict[str, Any] | None = None) -> dict[str, Any]:
         """
         Prepare kwargs for Chroma query operations.
         """
@@ -208,6 +243,151 @@ class ChromaDocumentStore:
             "where_document": chroma_filters.where_document,
             "include": ["embeddings", "documents", "metadatas", "distances"],
         }
+
+    @staticmethod
+    def _infer_type_from_value(value: Any) -> str:
+        """
+        Infers the Chroma/OpenSearch-compatible type from a metadata value.
+
+        Returns types matching OpenSearch format for consistency:
+        - 'keyword' for strings
+        - 'long' for integers
+        - 'float' for floats
+        - 'boolean' for booleans
+
+        :param value: The value to infer the type from.
+        :returns: The inferred type as a string.
+        """
+        if isinstance(value, bool):
+            return "boolean"
+        elif isinstance(value, int):
+            return "long"
+        elif isinstance(value, float):
+            return "float"
+        elif isinstance(value, str):
+            return "keyword"
+        else:
+            return "keyword"  # fallback
+
+    @staticmethod
+    def _count_unique_metadata(
+        metadatas: list[Metadata] | None,
+        normalized_fields: list[str],
+    ) -> dict[str, int]:
+        """
+        Counts unique values for each specified metadata field.
+
+        :param metadatas: List of metadata mappings from a Chroma get result.
+        :param normalized_fields: List of field names to count unique values for.
+        :returns: A dictionary mapping each field name to the count of its unique values.
+        """
+        if not metadatas:
+            return dict.fromkeys(normalized_fields, 0)
+
+        unique_counts = {}
+        for field in normalized_fields:
+            values = {meta.get(field) for meta in metadatas if meta and field in meta and meta.get(field) is not None}
+            unique_counts[field] = len(values)
+
+        return unique_counts
+
+    @staticmethod
+    def _build_fields_info(metadatas: list[Metadata] | None) -> dict[str, dict[str, str]]:
+        """
+        Builds field type information by inferring types from metadata values.
+
+        :param metadatas: List of metadata mappings from a Chroma get result.
+        :returns: A dictionary mapping field names to their inferred type information.
+        """
+        if not metadatas:
+            return {}
+
+        field_info: dict[str, dict[str, str]] = {}
+
+        for meta in metadatas:
+            if not meta:
+                continue
+
+            for field_name, value in meta.items():
+                if value is not None and field_name not in field_info:
+                    field_info[field_name] = {"type": ChromaDocumentStore._infer_type_from_value(value)}
+
+        return field_info
+
+    @staticmethod
+    def _compute_field_min_max(
+        metadatas: list[Metadata] | None,
+        field_name: str,
+    ) -> dict[str, Any]:
+        """
+        Computes the minimum and maximum values for a metadata field.
+
+        :param metadatas: List of metadata mappings from a Chroma get result.
+        :param field_name: The metadata field name to compute min/max for.
+        :returns: A dictionary with "min" and "max" keys.
+        """
+        if not metadatas:
+            return {"min": None, "max": None}
+
+        values: list[str | int | float] = []
+        for meta in metadatas:
+            if meta and field_name in meta:
+                val = meta.get(field_name)
+                if isinstance(val, str | int | float):
+                    values.append(val)
+
+        if not values:
+            return {"min": None, "max": None}
+
+        return {"min": min(values), "max": max(values)}
+
+    @staticmethod
+    def _compute_field_unique_values(
+        result: GetResult,
+        field_name: str,
+        search_term: str | None,
+        from_: int,
+        size: int,
+    ) -> tuple[list[str], int]:
+        """
+        Computes paginated unique values for a metadata field from a Chroma get result.
+
+        :param result: The full GetResult from a Chroma collection get operation.
+        :param field_name: The metadata field name to collect unique values for.
+        :param search_term: Optional search term to filter documents by content.
+        :param from_: The offset to start returning values from.
+        :param size: The maximum number of unique values to return.
+        :returns: A tuple of the paginated unique values list and the total count.
+        """
+        metadatas = result.get("metadatas", [])
+
+        if not metadatas:
+            return [], 0
+
+        if search_term:
+            documents = result.get("documents")
+            if documents is None:
+                documents = []
+            filtered_metadatas = [
+                metadatas[i] for i in range(len(documents)) if documents[i] and search_term in documents[i]
+            ]
+            metadatas = filtered_metadatas
+
+        if not metadatas:
+            return [], 0
+
+        unique_values = {
+            str(meta.get(field_name))
+            for meta in metadatas
+            if meta and field_name in meta and meta.get(field_name) is not None
+        }
+
+        sorted_values = sorted(unique_values)
+        total_count = len(sorted_values)
+        end = from_ + size
+        paginated_values = sorted_values[from_:end]
+
+        return paginated_values, total_count
 
     def count_documents(self) -> int:
         """
@@ -233,12 +413,12 @@ class ChromaDocumentStore:
 
         return value
 
-    def filter_documents(self, filters: Optional[dict[str, Any]] = None) -> list[Document]:
+    def filter_documents(self, filters: dict[str, Any] | None = None) -> list[Document]:
         """
         Returns the documents that match the filters provided.
 
         For a detailed specification of the filters,
-        refer to the [documentation](https://docs.haystack.deepset.ai/v2.0/docs/metadata-filtering).
+        refer to the [documentation](https://docs.haystack.deepset.ai/docs/metadata-filtering).
 
         :param filters: the filters to apply to the document list.
         :returns: a list of Documents that match the given filters.
@@ -246,19 +426,19 @@ class ChromaDocumentStore:
         self._ensure_initialized()
         assert self._collection is not None
 
-        kwargs = self._prepare_get_kwargs(filters)
+        kwargs = ChromaDocumentStore._prepare_get_kwargs(filters)
         result = self._collection.get(**kwargs)
 
         return self._get_result_to_documents(result)
 
-    async def filter_documents_async(self, filters: Optional[dict[str, Any]] = None) -> list[Document]:
+    async def filter_documents_async(self, filters: dict[str, Any] | None = None) -> list[Document]:
         """
         Asynchronously returns the documents that match the filters provided.
 
         Asynchronous methods are only supported for HTTP connections.
 
         For a detailed specification of the filters,
-        refer to the [documentation](https://docs.haystack.deepset.ai/v2.0/docs/metadata-filtering).
+        refer to the [documentation](https://docs.haystack.deepset.ai/docs/metadata-filtering).
 
         :param filters: the filters to apply to the document list.
         :returns: a list of Documents that match the given filters.
@@ -266,12 +446,63 @@ class ChromaDocumentStore:
         await self._ensure_initialized_async()
         assert self._async_collection is not None
 
-        kwargs = self._prepare_get_kwargs(filters)
+        kwargs = ChromaDocumentStore._prepare_get_kwargs(filters)
         result = await self._async_collection.get(**kwargs)
 
         return self._get_result_to_documents(result)
 
-    def _convert_document_to_chroma(self, doc: Document) -> Optional[dict[str, Any]]:
+    @staticmethod
+    def _filter_metadata(meta: dict[str, Any]) -> dict[str, str | int | float | bool | None]:
+        """
+        Filters metadata to only include supported types for Chroma.
+
+        returns:
+            A new dictionary with only valid metadata values.
+        """
+        valid_meta: dict[str, str | int | float | bool | None] = {}
+        discarded_keys = []
+
+        for k, v in meta.items():
+            if v is None or isinstance(v, SUPPORTED_TYPES_FOR_METADATA_VALUES):
+                valid_meta[k] = v
+            else:
+                discarded_keys.append(k)
+
+        if discarded_keys:
+            logger.warning(
+                "Metadata contains values of unsupported types for the keys: {keys}. "
+                "These items will be discarded. Supported types are: {types}.",
+                keys=", ".join(discarded_keys),
+                types=", ".join([t.__name__ for t in SUPPORTED_TYPES_FOR_METADATA_VALUES]),
+            )
+
+        return valid_meta
+
+    @staticmethod
+    def _prepare_metadata_update(
+        matching_docs: list[Document], meta: dict[str, Any]
+    ) -> tuple[list[str], list[Metadata]]:
+        """
+        Prepares document IDs and updated metadata for batch update operations.
+
+        :param matching_docs: List of documents to update.
+        :param meta: New metadata to merge with existing document metadata.
+        :returns: Tuple of (ids_to_update, updated_metadata).
+        """
+        ids_to_update = []
+        updated_metadata: list[Metadata] = []
+
+        for doc in matching_docs:
+            ids_to_update.append(doc.id)
+            current_meta = doc.meta or {}
+            updated_meta = {**current_meta, **meta}
+            filtered_meta = ChromaDocumentStore._filter_metadata(updated_meta)
+            updated_metadata.append(cast(Metadata, filtered_meta))
+
+        return ids_to_update, updated_metadata
+
+    @staticmethod
+    def _convert_document_to_chroma(doc: Document) -> dict[str, Any] | None:
         """
         Converts a Haystack Document to a Chroma document.
         """
@@ -296,11 +527,20 @@ class ChromaDocumentStore:
         data: dict[str, Any] = {"ids": [doc.id], "documents": [doc.content]}
 
         if doc.meta:
-            valid_meta = {}
+            valid_meta: dict[str, SUPPORTED_METADATA_VALUES_TYPE | list[SUPPORTED_METADATA_VALUES_TYPE]] = {}
             discarded_keys = []
 
             for k, v in doc.meta.items():
                 if isinstance(v, SUPPORTED_TYPES_FOR_METADATA_VALUES):
+                    valid_meta[k] = v
+                # For list metadata values, list must not be empty, must be of all same type
+                # and be one of `SUPPORTED_TYPES_FOR_METADATA_VALUES`
+                elif (
+                    isinstance(v, list)
+                    and len(v) > 0
+                    and (first_type := type(v[0])) in SUPPORTED_TYPES_FOR_METADATA_VALUES
+                    and all(isinstance(item, first_type) for item in v)
+                ):
                     valid_meta[k] = v
                 else:
                     discarded_keys.append(k)
@@ -353,7 +593,7 @@ class ChromaDocumentStore:
         assert self._collection is not None
 
         for doc in documents:
-            data = self._convert_document_to_chroma(doc)
+            data = ChromaDocumentStore._convert_document_to_chroma(doc)
             if data is not None:
                 self._collection.add(**data)
 
@@ -384,7 +624,7 @@ class ChromaDocumentStore:
         assert self._async_collection is not None
 
         for doc in documents:
-            data = self._convert_document_to_chroma(doc)
+            data = ChromaDocumentStore._convert_document_to_chroma(doc)
             if data is not None:
                 await self._async_collection.add(**data)
 
@@ -413,6 +653,181 @@ class ChromaDocumentStore:
         assert self._async_collection is not None
 
         await self._async_collection.delete(ids=document_ids)
+
+    def delete_by_filter(self, filters: dict[str, Any]) -> int:
+        """
+        Deletes all documents that match the provided filters.
+
+        :param filters: The filters to apply to select documents for deletion.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :returns: The number of documents deleted.
+        """
+        self._ensure_initialized()
+        assert self._collection is not None
+
+        try:
+            chroma_filter = _convert_filters(filters)
+
+            # count documents before deletion since ChromaDB doesn't return count
+            matching_docs = self.filter_documents(filters)
+            count = len(matching_docs)
+
+            if count == 0:
+                return 0
+
+            delete_kwargs: dict[str, Any] = {}
+
+            if chroma_filter.ids:
+                # if the filter contains IDs, use them directly
+                delete_kwargs["ids"] = chroma_filter.ids
+            else:
+                # use where/where_document filters
+                if chroma_filter.where:
+                    delete_kwargs["where"] = chroma_filter.where
+                if chroma_filter.where_document:
+                    delete_kwargs["where_document"] = chroma_filter.where_document
+
+            # perform deletion
+            self._collection.delete(**delete_kwargs)
+
+            logger.info(
+                "Deleted {n_docs} documents from collection '{name}' using filters.",
+                n_docs=count,
+                name=self._collection_name,
+            )
+            return count
+        except Exception as e:
+            msg = f"Failed to delete documents by filter from ChromaDB: {e!s}"
+            raise DocumentStoreError(msg) from e
+
+    async def delete_by_filter_async(self, filters: dict[str, Any]) -> int:
+        """
+        Asynchronously deletes all documents that match the provided filters.
+
+        Asynchronous methods are only supported for HTTP connections.
+
+        :param filters: The filters to apply to select documents for deletion.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :returns: The number of documents deleted.
+        """
+        await self._ensure_initialized_async()
+        assert self._async_collection is not None
+
+        try:
+            chroma_filter = _convert_filters(filters)
+
+            # count documents before deletion since ChromaDB doesn't return count
+            matching_docs = await self.filter_documents_async(filters)
+            count = len(matching_docs)
+
+            if count == 0:
+                return 0
+
+            delete_kwargs: dict[str, Any] = {}
+
+            if chroma_filter.ids:
+                # if filter contains IDs, use them directly
+                delete_kwargs["ids"] = chroma_filter.ids
+            else:
+                # use where/where_document filters
+                if chroma_filter.where:
+                    delete_kwargs["where"] = chroma_filter.where
+                if chroma_filter.where_document:
+                    delete_kwargs["where_document"] = chroma_filter.where_document
+
+            await self._async_collection.delete(**delete_kwargs)
+
+            logger.info(
+                "Deleted {n_docs} documents from collection '{name}' using filters.",
+                n_docs=count,
+                name=self._collection_name,
+            )
+            return count
+        except Exception as e:
+            msg = f"Failed to delete documents by filter from ChromaDB: {e!s}"
+            raise DocumentStoreError(msg) from e
+
+    def update_by_filter(self, filters: dict[str, Any], meta: dict[str, Any]) -> int:
+        """
+        Updates the metadata of all documents that match the provided filters.
+
+        **Note**: This operation is not atomic. Documents matching the filter are fetched first,
+        then updated. If documents are modified between the fetch and update operations,
+        those changes may be lost.
+
+        :param filters: The filters to apply to select documents for updating.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :param meta: The metadata fields to update. This will be merged with existing metadata.
+        :returns: The number of documents updated.
+        """
+        self._ensure_initialized()
+        assert self._collection is not None
+
+        try:
+            matching_docs = self.filter_documents(filters)
+
+            if not matching_docs:
+                return 0
+
+            ids_to_update, updated_metadata = ChromaDocumentStore._prepare_metadata_update(matching_docs, meta)
+
+            # batch update
+            self._collection.update(
+                ids=ids_to_update,
+                metadatas=cast(OneOrMany[Metadata], updated_metadata),
+            )
+
+            logger.info(
+                "Updated {n_docs} documents in collection '{name}' using filters.",
+                n_docs=len(ids_to_update),
+                name=self._collection_name,
+            )
+            return len(ids_to_update)
+        except Exception as e:
+            msg = f"Failed to update documents by filter in ChromaDB: {e!s}"
+            raise DocumentStoreError(msg) from e
+
+    async def update_by_filter_async(self, filters: dict[str, Any], meta: dict[str, Any]) -> int:
+        """
+        Asynchronously updates the metadata of all documents that match the provided filters.
+
+        Asynchronous methods are only supported for HTTP connections.
+
+        **Note**: This operation is not atomic. Documents matching the filter are fetched first,
+        then updated. If documents are modified between the fetch and update operations,
+        those changes may be lost.
+
+        :param filters: The filters to apply to select documents for updating.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :param meta: The metadata fields to update. This will be merged with existing metadata.
+        :returns: The number of documents updated.
+        """
+        await self._ensure_initialized_async()
+        assert self._async_collection is not None
+
+        try:
+            matching_docs = await self.filter_documents_async(filters)
+
+            if not matching_docs:
+                return 0
+
+            ids_to_update, updated_metadata = ChromaDocumentStore._prepare_metadata_update(matching_docs, meta)
+
+            # batch update
+            await self._async_collection.update(
+                ids=ids_to_update,
+                metadatas=cast(OneOrMany[Metadata], updated_metadata),
+            )
+
+            logger.info(
+                "Updated {n_docs} documents in collection '{name}' using filters.",
+                n_docs=len(ids_to_update),
+                name=self._collection_name,
+            )
+            return len(ids_to_update)
+        except Exception as e:
+            msg = f"Failed to update documents by filter in ChromaDB: {e!s}"
+            raise DocumentStoreError(msg) from e
 
     def delete_all_documents(self, *, recreate_index: bool = False) -> None:
         """
@@ -444,12 +859,13 @@ class ChromaDocumentStore:
             else:
                 collection = self._collection.get()
                 ids = collection.get("ids", [])
-                self._collection.delete(ids=ids)  # type: ignore
-                logger.info(
-                    "Deleted all the {n_docs} documents from the collection '{name}'.",
-                    name=self._collection_name,
-                    n_docs=len(ids),
-                )
+                if ids:
+                    self._collection.delete(ids=ids)  # type: ignore
+                    logger.info(
+                        "Deleted all the {n_docs} documents from the collection '{name}'.",
+                        name=self._collection_name,
+                        n_docs=len(ids),
+                    )
         except Exception as e:
             msg = f"Failed to delete all documents from ChromaDB: {e!s}"
             raise DocumentStoreError(msg) from e
@@ -483,12 +899,13 @@ class ChromaDocumentStore:
             else:
                 collection = await self._async_collection.get()
                 ids = collection.get("ids", [])
-                await self._async_collection.delete(ids=ids)  # type: ignore
-                logger.info(
-                    "Deleted all the {n_docs} documents from the collection '{name}'.",
-                    name=self._collection_name,
-                    n_docs=len(ids),
-                )
+                if ids:
+                    await self._async_collection.delete(ids=ids)  # type: ignore
+                    logger.info(
+                        "Deleted all the {n_docs} documents from the collection '{name}'.",
+                        name=self._collection_name,
+                        n_docs=len(ids),
+                    )
 
         except Exception as e:
             msg = f"Failed to delete all documents from ChromaDB: {e!s}"
@@ -498,7 +915,7 @@ class ChromaDocumentStore:
         self,
         queries: list[str],
         top_k: int,
-        filters: Optional[dict[str, Any]] = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[list[Document]]:
         """
         Search the documents in the store using the provided text queries.
@@ -511,7 +928,7 @@ class ChromaDocumentStore:
         self._ensure_initialized()
         assert self._collection is not None
 
-        kwargs = self._prepare_query_kwargs(filters)
+        kwargs = ChromaDocumentStore._prepare_query_kwargs(filters)
         results = self._collection.query(
             query_texts=queries,
             n_results=top_k,
@@ -524,7 +941,7 @@ class ChromaDocumentStore:
         self,
         queries: list[str],
         top_k: int,
-        filters: Optional[dict[str, Any]] = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[list[Document]]:
         """
         Asynchronously search the documents in the store using the provided text queries.
@@ -539,7 +956,7 @@ class ChromaDocumentStore:
         await self._ensure_initialized_async()
         assert self._async_collection is not None
 
-        kwargs = self._prepare_query_kwargs(filters)
+        kwargs = ChromaDocumentStore._prepare_query_kwargs(filters)
         results = await self._async_collection.query(
             query_texts=queries,
             n_results=top_k,
@@ -552,7 +969,7 @@ class ChromaDocumentStore:
         self,
         query_embeddings: list[list[float]],
         top_k: int,
-        filters: Optional[dict[str, Any]] = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[list[Document]]:
         """
         Perform vector search on the stored document, pass the embeddings of the queries instead of their text.
@@ -567,7 +984,7 @@ class ChromaDocumentStore:
         self._ensure_initialized()
         assert self._collection is not None
 
-        kwargs = self._prepare_query_kwargs(filters)
+        kwargs = ChromaDocumentStore._prepare_query_kwargs(filters)
         results = self._collection.query(
             query_embeddings=cast(list[Sequence[float]], query_embeddings),
             n_results=top_k,
@@ -580,11 +997,10 @@ class ChromaDocumentStore:
         self,
         query_embeddings: list[list[float]],
         top_k: int,
-        filters: Optional[dict[str, Any]] = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[list[Document]]:
         """
-        Asynchronously perform vector search on the stored document, pass the embeddings of the queries instead of
-        their text.
+        Asynchronously perform vector search using query embeddings instead of text.
 
         Asynchronous methods are only supported for HTTP connections.
 
@@ -598,7 +1014,7 @@ class ChromaDocumentStore:
         await self._ensure_initialized_async()
         assert self._async_collection is not None
 
-        kwargs = self._prepare_query_kwargs(filters)
+        kwargs = ChromaDocumentStore._prepare_query_kwargs(filters)
         results = await self._async_collection.query(
             query_embeddings=cast(list[Sequence[float]], query_embeddings),
             n_results=top_k,
@@ -606,6 +1022,268 @@ class ChromaDocumentStore:
         )
 
         return self._query_result_to_documents(results)
+
+    def count_documents_by_filter(self, filters: dict[str, Any]) -> int:
+        """
+        Returns the number of documents that match the provided filters.
+
+        :param filters: The filters to apply to count documents.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :returns: The number of documents that match the filters.
+        """
+        self._ensure_initialized()
+        assert self._collection is not None
+
+        # Use existing filter infrastructure with minimal data transfer
+        kwargs = ChromaDocumentStore._prepare_get_kwargs(filters)
+        # Only retrieve IDs to minimize data transfer
+        kwargs["include"] = []
+
+        result = self._collection.get(**kwargs)
+        return len(result["ids"])
+
+    async def count_documents_by_filter_async(self, filters: dict[str, Any]) -> int:
+        """
+        Asynchronously returns the number of documents that match the provided filters.
+
+        Asynchronous methods are only supported for HTTP connections.
+
+        :param filters: The filters to apply to count documents.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :returns: The number of documents that match the filters.
+        """
+        await self._ensure_initialized_async()
+        assert self._async_collection is not None
+
+        # Use existing filter infrastructure with minimal data transfer
+        kwargs = ChromaDocumentStore._prepare_get_kwargs(filters)
+        # Only retrieve IDs to minimize data transfer
+        kwargs["include"] = []
+
+        result = await self._async_collection.get(**kwargs)
+        return len(result["ids"])
+
+    def count_unique_metadata_by_filter(self, filters: dict[str, Any], metadata_fields: list[str]) -> dict[str, int]:
+        """
+        Return unique value counts for metadata fields of documents matching the provided filters.
+
+        :param filters: The filters to apply to count documents.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :param metadata_fields: List of field names to calculate unique values for.
+            Field names can include or omit the "meta." prefix.
+        :returns: A dictionary mapping each metadata field name to the count of
+                  its unique values among the filtered documents.
+        """
+        self._ensure_initialized()
+        assert self._collection is not None
+
+        normalized_fields = [_normalize_metadata_field_name(field) for field in metadata_fields]
+
+        kwargs = ChromaDocumentStore._prepare_get_kwargs(filters)
+        kwargs["include"] = ["metadatas"]
+
+        result = self._collection.get(**kwargs)
+        return self._count_unique_metadata(result.get("metadatas", []), normalized_fields)
+
+    async def count_unique_metadata_by_filter_async(
+        self, filters: dict[str, Any], metadata_fields: list[str]
+    ) -> dict[str, int]:
+        """
+        Asynchronously return unique value counts for metadata fields of documents matching the provided filters.
+
+        Asynchronous methods are only supported for HTTP connections.
+
+        :param filters: The filters to apply to count documents.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :param metadata_fields: List of field names to calculate unique values for.
+            Field names can include or omit the "meta." prefix.
+        :returns: A dictionary mapping each metadata field name to the count of
+                  its unique values among the filtered documents.
+        """
+        await self._ensure_initialized_async()
+        assert self._async_collection is not None
+
+        normalized_fields = [_normalize_metadata_field_name(field) for field in metadata_fields]
+
+        kwargs = ChromaDocumentStore._prepare_get_kwargs(filters)
+        kwargs["include"] = ["metadatas"]
+
+        result = await self._async_collection.get(**kwargs)
+        return self._count_unique_metadata(result.get("metadatas", []), normalized_fields)
+
+    def get_metadata_fields_info(self) -> dict[str, dict[str, str]]:
+        """
+        Returns information about the metadata fields in the collection.
+
+        Since ChromaDB doesn't maintain a schema, this method samples documents
+        to infer field types.
+
+        If we populated the collection with documents like:
+
+        ```python
+        Document(content="Doc 1", meta={"category": "A", "status": "active", "priority": 1})
+        Document(content="Doc 2", meta={"category": "B", "status": "inactive"})
+        ```
+
+        This method would return:
+
+        ```python
+        {
+            'category': {'type': 'keyword'},
+            'status': {'type': 'keyword'},
+            'priority': {'type': 'long'},
+        }
+        ```
+
+        :returns: Dictionary mapping field names to their type information.
+        """
+        self._ensure_initialized()
+        assert self._collection is not None
+
+        result = self._collection.get(include=["metadatas"], limit=10000)
+        return self._build_fields_info(result.get("metadatas", []))
+
+    async def get_metadata_fields_info_async(self) -> dict[str, dict[str, str]]:
+        """
+        Asynchronously returns information about the metadata fields in the collection.
+
+        Asynchronous methods are only supported for HTTP connections.
+
+        Since ChromaDB doesn't maintain a schema, this method samples documents
+        to infer field types.
+
+        If we populated the collection with documents like:
+
+        ```python
+        Document(content="Doc 1", meta={"category": "A", "status": "active", "priority": 1})
+        Document(content="Doc 2", meta={"category": "B", "status": "inactive"})
+        ```
+
+        This method would return:
+
+        ```python
+        {
+            'category': {'type': 'keyword'},
+            'status': {'type': 'keyword'},
+            'priority': {'type': 'long'},
+        }
+        ```
+
+        :returns: Dictionary mapping field names to their type information.
+        """
+        await self._ensure_initialized_async()
+        assert self._async_collection is not None
+
+        result = await self._async_collection.get(include=["metadatas"], limit=10000)
+        return self._build_fields_info(result.get("metadatas", []))
+
+    def get_metadata_field_min_max(self, metadata_field: str) -> dict[str, Any]:
+        """
+        Returns the minimum and maximum values for the given metadata field.
+
+        :param metadata_field: The metadata field to get the minimum and maximum values for.
+            Can include or omit the "meta." prefix.
+        :returns: A dictionary with the keys "min" and "max", where each value is
+                  the minimum or maximum value of the metadata field across all documents.
+                  Returns:
+                  ```python
+                    {"min": None, "max": None}
+                  ```
+                  if field doesn't exist or has no values.
+        """
+        self._ensure_initialized()
+        assert self._collection is not None
+
+        field_name = _normalize_metadata_field_name(metadata_field)
+
+        result = self._collection.get(include=["metadatas"])
+        return self._compute_field_min_max(result.get("metadatas", []), field_name)
+
+    async def get_metadata_field_min_max_async(self, metadata_field: str) -> dict[str, Any]:
+        """
+        Asynchronously returns the minimum and maximum values for the given metadata field.
+
+        Asynchronous methods are only supported for HTTP connections.
+
+        :param metadata_field: The metadata field to get the minimum and maximum values for.
+            Can include or omit the "meta." prefix.
+        :returns: A dictionary with the keys "min" and "max", where each value is
+                  the minimum or maximum value of the metadata field across all documents.
+                  Returns:
+                  ```python
+                    {"min": None, "max": None}
+                  ```
+                  if field doesn't exist or has no values.
+        """
+        await self._ensure_initialized_async()
+        assert self._async_collection is not None
+
+        field_name = _normalize_metadata_field_name(metadata_field)
+
+        result = await self._async_collection.get(include=["metadatas"])
+        return self._compute_field_min_max(result.get("metadatas", []), field_name)
+
+    def get_metadata_field_unique_values(
+        self,
+        metadata_field: str,
+        search_term: str | None = None,
+        from_: int = 0,
+        size: int = 10,
+    ) -> tuple[list[str], int]:
+        """
+        Return unique metadata field values, optionally filtered by a content search term, with pagination.
+
+        :param metadata_field: The metadata field to get unique values for.
+            Can include or omit the "meta." prefix.
+        :param search_term: Optional search term to filter documents by matching
+            in the content field.
+        :param from_: The offset to start returning values from (for pagination).
+        :param size: The maximum number of unique values to return.
+        :returns: A tuple containing list of unique values and total count of unique values.
+        """
+        self._ensure_initialized()
+        assert self._collection is not None
+
+        field_name = _normalize_metadata_field_name(metadata_field)
+
+        kwargs: dict[str, Any] = {"include": ["metadatas"]}
+        if search_term:
+            kwargs["include"] = ["metadatas", "documents"]
+
+        result = self._collection.get(**kwargs)
+        return self._compute_field_unique_values(result, field_name, search_term, from_, size)
+
+    async def get_metadata_field_unique_values_async(
+        self,
+        metadata_field: str,
+        search_term: str | None = None,
+        from_: int = 0,
+        size: int = 10,
+    ) -> tuple[list[str], int]:
+        """
+        Asynchronously return unique metadata field values, optionally filtered by content, with pagination.
+
+        Asynchronous methods are only supported for HTTP connections.
+
+        :param metadata_field: The metadata field to get unique values for.
+            Can include or omit the "meta." prefix.
+        :param search_term: Optional search term to filter documents by matching
+            in the content field.
+        :param from_: The offset to start returning values from (for pagination).
+        :param size: The maximum number of unique values to return.
+        :returns: A tuple containing list of unique values and total count of unique values.
+        """
+        await self._ensure_initialized_async()
+        assert self._async_collection is not None
+
+        field_name = _normalize_metadata_field_name(metadata_field)
+
+        kwargs: dict[str, Any] = {"include": ["metadatas"]}
+        if search_term:
+            kwargs["include"] = ["metadatas", "documents"]
+
+        result = await self._async_collection.get(**kwargs)
+        return self._compute_field_unique_values(result, field_name, search_term, from_, size)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ChromaDocumentStore":
@@ -634,6 +1312,7 @@ class ChromaDocumentStore:
             host=self._host,
             port=self._port,
             distance_function=self._distance_function,
+            client_settings=self._client_settings,
             **self._embedding_function_params,
         )
 

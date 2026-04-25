@@ -1,11 +1,76 @@
 # Changelog
 
-## [integrations/chroma-v3.4.1]
+## [integrations/chroma-v4.2.0] - 2026-03-11
+
+### 🚀 Features
+
+- Add support for metadata that contains lists of supported types (#2877)
+
+### 📚 Documentation
+
+- Simplify pydoc configs (#2855)
+
+### 🧪 Testing
+
+- Replacing each `DocumentStore` specific tests and used the generalised ones from `haystack.testing.document_store` (#2812)
+- Chroma - remove tests for invalid Settings (now ignored) (#2935)
+
+### 🧹 Chores
+
+- Remove unused allow-direct-references (#2866)
+- Standardize author mentions (#2897)
+
+
+## [integrations/chroma-v4.1.1] - 2026-02-10
+
+### 📚 Documentation
+
+- Fixing curly brackets (#2824)
+
+
+## [integrations/chroma-v4.1.0] - 2026-02-10
+
+### 🌀 Miscellaneous
+
+- Add metadata query operations to ChromaDocumentStore (#2819)
+
+## [integrations/chroma-v4.0.0] - 2026-01-12
+
+### 🚀 Features
+
+- Add `client_settings` to `ChromaDocumentStore` (#2651)
+
+### 📚 Documentation
+
+- Fix: doc links (#2662)
+
+### 🧹 Chores
+
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Chroma - drop Python 3.9 and use X|Y typing (#2701)
+
+### 🌀 Miscellaneous
+
+- Fix: Fix doc links (#2661)
+
+## [integrations/chroma-v3.5.0] - 2026-01-07
+
+### 🚀 Features
+
+- Adding `delete_by_filter()` and `update_by_filter()` to `ChromaDocumentStore` (#2649)
+
 
 ### ⚙️ CI
 
-- Adopt PEP 585 type hinting (#2475)
+- Change pytest command (#2475)
 
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+
+### 🌀 Miscellaneous
+
+- Adopt PEP 585 type hinting (part 1) (#2509)
 
 ## [integrations/chroma-v3.4.0] - 2025-10-27
 

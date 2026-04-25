@@ -2,7 +2,6 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
-from cohere import UserChatMessageV2
 from cohere.core import ApiError
 from haystack import Pipeline
 from haystack.components.generators.utils import print_streaming_chunk
@@ -63,20 +62,18 @@ class TestFormatMessage:
 
         formatted_message = _format_message(message)
 
-        assert isinstance(formatted_message, UserChatMessageV2)
-        assert formatted_message.role == "user"
-        assert isinstance(formatted_message.content, list)
-        assert len(formatted_message.content) == 2
+        assert isinstance(formatted_message, dict)
+        assert formatted_message["role"] == "user"
+        assert isinstance(formatted_message["content"], list)
+        assert len(formatted_message["content"]) == 2
 
         # Check text content
-        assert formatted_message.content[0].type == "text"
-        assert formatted_message.content[0].text == "What's in this image?"
+        assert formatted_message["content"][0]["type"] == "text"
+        assert formatted_message["content"][0]["text"] == "What's in this image?"
 
         # Check image content
-        assert formatted_message.content[1].type == "image_url"
-        assert hasattr(formatted_message.content[1], "image_url")
-        assert hasattr(formatted_message.content[1].image_url, "url")
-        assert formatted_message.content[1].image_url.url == f"data:image/png;base64,{base64_image}"
+        assert formatted_message["content"][1]["type"] == "image_url"
+        assert formatted_message["content"][1]["image_url"]["url"] == f"data:image/png;base64,{base64_image}"
 
     def test_format_message_with_unsupported_mime_type(self):
         """Test that a ChatMessage with unsupported mime type raises ValueError."""
@@ -129,7 +126,7 @@ class TestFormatMessage:
             # Should not raise any exception
             formatted_message = _format_message(message)
             assert formatted_message is not None
-            assert isinstance(formatted_message, UserChatMessageV2)
+            assert isinstance(formatted_message, dict)
 
     def test_multiple_images_in_single_message(self):
         """Test handling multiple images in a single message."""
@@ -143,23 +140,32 @@ class TestFormatMessage:
 
         formatted_message = _format_message(message)
 
-        assert isinstance(formatted_message, UserChatMessageV2)
-        assert len(formatted_message.content) == 3  # 1 text + 2 images
-        assert formatted_message.content[0].type == "text"
-        assert formatted_message.content[1].type == "image_url"
-        assert formatted_message.content[2].type == "image_url"
+        assert isinstance(formatted_message, dict)
+        assert len(formatted_message["content"]) == 3  # 1 text + 2 images
+        assert formatted_message["content"][0]["type"] == "text"
+        assert formatted_message["content"][1]["type"] == "image_url"
+        assert formatted_message["content"][2]["type"] == "image_url"
 
 
 class TestCohereChatGenerator:
+    def test_supported_models(self) -> None:
+        """SUPPORTED_MODELS is a non-empty list of strings."""
+        models = CohereChatGenerator.SUPPORTED_MODELS
+        assert isinstance(models, list)
+        assert len(models) > 0
+        assert all(isinstance(m, str) for m in models)
+
     def test_init_default(self, monkeypatch):
         monkeypatch.setenv("COHERE_API_KEY", "test-api-key")
 
         component = CohereChatGenerator()
         assert component.api_key == Secret.from_env_var(["COHERE_API_KEY", "CO_API_KEY"])
-        assert component.model == "command-r-08-2024"
+        assert component.model == "command-a-03-2025"
         assert component.streaming_callback is None
         assert component.api_base_url == "https://api.cohere.com"
         assert not component.generation_kwargs
+        assert component.timeout is None
+        assert component.max_retries is None
 
     def test_init_fail_wo_api_key(self, monkeypatch):
         monkeypatch.delenv("COHERE_API_KEY", raising=False)
@@ -177,6 +183,8 @@ class TestCohereChatGenerator:
                 "max_tokens": 10,
                 "some_test_param": "test-params",
             },
+            timeout=30.0,
+            max_retries=5,
         )
         assert component.api_key == Secret.from_token("test-api-key")
         assert component.model == "command-nightly"
@@ -186,6 +194,8 @@ class TestCohereChatGenerator:
             "max_tokens": 10,
             "some_test_param": "test-params",
         }
+        assert component.timeout == 30.0
+        assert component.max_retries == 5
 
     def test_to_dict_default(self, monkeypatch):
         monkeypatch.setenv("COHERE_API_KEY", "test-api-key")
@@ -194,7 +204,7 @@ class TestCohereChatGenerator:
         assert data == {
             "type": "haystack_integrations.components.generators.cohere.chat.chat_generator.CohereChatGenerator",
             "init_parameters": {
-                "model": "command-r-08-2024",
+                "model": "command-a-03-2025",
                 "streaming_callback": None,
                 "api_key": {
                     "env_vars": ["COHERE_API_KEY", "CO_API_KEY"],
@@ -204,6 +214,8 @@ class TestCohereChatGenerator:
                 "api_base_url": "https://api.cohere.com",
                 "generation_kwargs": {},
                 "tools": None,
+                "timeout": None,
+                "max_retries": None,
             },
         }
 
@@ -237,6 +249,8 @@ class TestCohereChatGenerator:
                     "some_test_param": "test-params",
                 },
                 "tools": None,
+                "timeout": None,
+                "max_retries": None,
             },
         }
 
@@ -246,7 +260,7 @@ class TestCohereChatGenerator:
         data = {
             "type": "haystack_integrations.components.generators.cohere.chat.chat_generator.CohereChatGenerator",
             "init_parameters": {
-                "model": "command-r-08-2024",
+                "model": "command-a-03-2025",
                 "api_base_url": "test-base-url",
                 "api_key": {
                     "env_vars": ["ENV_VAR"],
@@ -258,16 +272,20 @@ class TestCohereChatGenerator:
                     "max_tokens": 10,
                     "some_test_param": "test-params",
                 },
+                "timeout": None,
+                "max_retries": None,
             },
         }
         component = CohereChatGenerator.from_dict(data)
-        assert component.model == "command-r-08-2024"
+        assert component.model == "command-a-03-2025"
         assert component.streaming_callback is print_streaming_chunk
         assert component.api_base_url == "test-base-url"
         assert component.generation_kwargs == {
             "max_tokens": 10,
             "some_test_param": "test-params",
         }
+        assert component.timeout is None
+        assert component.max_retries is None
 
     def test_from_dict_fail_wo_env_var(self, monkeypatch):
         monkeypatch.delenv("COHERE_API_KEY", raising=False)
@@ -275,7 +293,7 @@ class TestCohereChatGenerator:
         data = {
             "type": "haystack_integrations.components.generators.cohere.chat.chat_generator.CohereChatGenerator",
             "init_parameters": {
-                "model": "command-r-08-2024",
+                "model": "command-a-03-2025",
                 "api_base_url": "test-base-url",
                 "api_key": {
                     "env_vars": ["COHERE_API_KEY", "CO_API_KEY"],
@@ -287,6 +305,8 @@ class TestCohereChatGenerator:
                     "max_tokens": 10,
                     "some_test_param": "test-params",
                 },
+                "timeout": None,
+                "max_retries": None,
             },
         }
         with pytest.raises(ValueError):
@@ -307,7 +327,6 @@ class TestCohereChatGenerator:
         )
 
         generator = CohereChatGenerator(
-            model="command-r-08-2024",
             generation_kwargs={"temperature": 0.7},
             streaming_callback=print_streaming_chunk,
             tools=[tool],
@@ -326,11 +345,13 @@ class TestCohereChatGenerator:
                 "generator": {
                     "type": "haystack_integrations.components.generators.cohere.chat.chat_generator.CohereChatGenerator",  # noqa: E501
                     "init_parameters": {
-                        "model": "command-r-08-2024",
+                        "model": "command-a-03-2025",
                         "api_key": {"type": "env_var", "env_vars": ["COHERE_API_KEY", "CO_API_KEY"], "strict": True},
                         "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
                         "api_base_url": "https://api.cohere.com",
                         "generation_kwargs": {"temperature": 0.7},
+                        "timeout": None,
+                        "max_retries": None,
                         "tools": [
                             {
                                 "type": "haystack.tools.tool.Tool",
@@ -448,6 +469,7 @@ class TestCohereChatGenerator:
         mock_response = MagicMock()
         mock_response.message.content = [MagicMock()]
         mock_response.message.content[0].text = "This is a test image response"
+        mock_response.message.content[0].type = "text"
         mock_response.message.tool_calls = None
         mock_response.finish_reason = "COMPLETE"
         mock_response.usage = None
@@ -467,14 +489,14 @@ class TestCohereChatGenerator:
         formatted_messages = call_args[1]["messages"]
 
         assert len(formatted_messages) == 1
-        # The multimodal message should be passed as a Cohere object
+        # The multimodal message should be passed as a dict
         multimodal_msg = formatted_messages[0]
 
-        assert isinstance(multimodal_msg, UserChatMessageV2)
-        assert multimodal_msg.role == "user"
-        assert len(multimodal_msg.content) == 2
-        assert multimodal_msg.content[0].type == "text"
-        assert multimodal_msg.content[1].type == "image_url"
+        assert isinstance(multimodal_msg, dict)
+        assert multimodal_msg["role"] == "user"
+        assert len(multimodal_msg["content"]) == 2
+        assert multimodal_msg["content"][0]["type"] == "text"
+        assert multimodal_msg["content"][1]["type"] == "image_url"
 
 
 @pytest.mark.skipif(
@@ -485,7 +507,7 @@ class TestCohereChatGenerator:
 class TestCohereChatGeneratorInference:
     def test_live_run(self):
         chat_messages = [ChatMessage.from_user("What's the capital of France")]
-        component = CohereChatGenerator(generation_kwargs={"temperature": 0.8})
+        component = CohereChatGenerator(model="command-r7b-12-2024", generation_kwargs={"temperature": 0.8})
         results = component.run(chat_messages)
         assert len(results["replies"]) == 1
         message: ChatMessage = results["replies"][0]
@@ -511,7 +533,7 @@ class TestCohereChatGeneratorInference:
                 self.responses += chunk.content if chunk.content else ""
 
         callback = Callback()
-        component = CohereChatGenerator(streaming_callback=callback, stream=True)
+        component = CohereChatGenerator(model="command-r7b-12-2024", streaming_callback=callback)
         results = component.run([ChatMessage.from_user("What's the capital of France? answer in a word")])
 
         assert len(results["replies"]) == 1
@@ -545,7 +567,7 @@ class TestCohereChatGeneratorInference:
                 },
             }
         ]
-        client = CohereChatGenerator(model="command-r-08-2024")
+        client = CohereChatGenerator(model="command-r7b-12-2024")
         response = client.run(
             messages=[ChatMessage.from_user("What is the current price of AAPL?")],
             generation_kwargs={"tools": tools_schema},
@@ -581,7 +603,7 @@ class TestCohereChatGeneratorInference:
             function=stock_price,
         )
         initial_messages = [ChatMessage.from_user("What is the current price of AAPL?")]
-        client = CohereChatGenerator(model="command-r-08-2024")
+        client = CohereChatGenerator(model="command-r7b-12-2024")
         response = client.run(
             messages=initial_messages,
             tools=[stock_price_tool],
@@ -636,7 +658,7 @@ class TestCohereChatGeneratorInference:
 
         initial_messages = [ChatMessage.from_user("What's the weather like in Paris?")]
         component = CohereChatGenerator(
-            model="command-r-08-2024",  # Cohere's model that supports tools
+            model="command-r7b-12-2024",
             tools=[weather_tool],
             streaming_callback=print_streaming_chunk,
         )
@@ -688,7 +710,7 @@ class TestCohereChatGeneratorInference:
         )
 
         pipeline = Pipeline()
-        pipeline.add_component("generator", CohereChatGenerator(model="command-r-08-2024", tools=[weather_tool]))
+        pipeline.add_component("generator", CohereChatGenerator(model="command-r7b-12-2024", tools=[weather_tool]))
         pipeline.add_component("tool_invoker", ToolInvoker(tools=[weather_tool]))
 
         pipeline.connect("generator", "tool_invoker")
@@ -773,7 +795,7 @@ class TestCohereChatGeneratorInference:
         initial_messages = [
             ChatMessage.from_user("What's the weather like in Paris and what is the population of Berlin?")
         ]
-        component = CohereChatGenerator(model="command-r-08-2024", tools=mixed_tools)
+        component = CohereChatGenerator(model="command-r7b-12-2024", tools=mixed_tools)
         results = component.run(messages=initial_messages)
 
         assert len(results["replies"]) > 0, "No replies received"

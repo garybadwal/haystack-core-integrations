@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
+
 from datetime import datetime
 from itertools import chain
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Literal
 
 from haystack.errors import FilterError
-from psycopg.sql import SQL, Composed
+from psycopg.sql import SQL, Composable, Composed, Identifier
+from psycopg.sql import Literal as SQLLiteral
 from psycopg.types.json import Jsonb
 
 # we need this mapping to cast meta values to the correct type,
@@ -21,7 +23,7 @@ PYTHON_TYPES_TO_PG_TYPES = {
 NO_VALUE = "no_value"
 
 
-def _validate_filters(filters: Optional[Dict[str, Any]] = None) -> None:
+def _validate_filters(filters: dict[str, Any] | None = None) -> None:
     """
     Validates the filters provided.
     """
@@ -35,8 +37,8 @@ def _validate_filters(filters: Optional[Dict[str, Any]] = None) -> None:
 
 
 def _convert_filters_to_where_clause_and_params(
-    filters: Dict[str, Any], operator: Literal["WHERE", "AND"] = "WHERE"
-) -> Tuple[Composed, Tuple]:
+    filters: dict[str, Any], operator: Literal["WHERE", "AND"] = "WHERE"
+) -> tuple[Composed, tuple]:
     """
     Convert Haystack filters to a WHERE clause and a tuple of params to query PostgreSQL.
     """
@@ -45,13 +47,13 @@ def _convert_filters_to_where_clause_and_params(
     else:
         query, values = _parse_logical_condition(filters)
 
-    where_clause = SQL(f" {operator} ") + SQL(query)
+    where_clause = SQL(f" {operator} ") + query
     params = tuple(value for value in values if value != NO_VALUE)
 
     return where_clause, params
 
 
-def _parse_logical_condition(condition: Dict[str, Any]) -> Tuple[str, List[Any]]:
+def _parse_logical_condition(condition: dict[str, Any]) -> tuple[Composed, list[Any]]:
     if "operator" not in condition:
         msg = f"'operator' key missing in {condition}"
         raise FilterError(msg)
@@ -81,17 +83,14 @@ def _parse_logical_condition(condition: Dict[str, Any]) -> Tuple[str, List[Any]]
         values = list(chain.from_iterable(values))
 
     if operator == "AND":
-        sql_query = f"({' AND '.join(query_parts)})"
-    elif operator == "OR":
-        sql_query = f"({' OR '.join(query_parts)})"
-    else:
-        msg = f"Unknown logical operator '{operator}'"
-        raise FilterError(msg)
+        sql_query = SQL("(") + SQL(" AND ").join(query_parts) + SQL(")")
+    else:  # operator == "OR"
+        sql_query = SQL("(") + SQL(" OR ").join(query_parts) + SQL(")")
 
     return sql_query, values
 
 
-def _parse_comparison_condition(condition: Dict[str, Any]) -> Tuple[str, List[Any]]:
+def _parse_comparison_condition(condition: dict[str, Any]) -> tuple[Composed, list[Any]]:
     field: str = condition["field"]
     if "operator" not in condition:
         msg = f"'operator' key missing in {condition}"
@@ -107,28 +106,36 @@ def _parse_comparison_condition(condition: Dict[str, Any]) -> Tuple[str, List[An
     value: Any = condition["value"]
 
     if field.startswith("meta."):
-        field = _treat_meta_field(field, value)
+        sql_field: Composable = _treat_meta_field(field, value)
+    else:
+        sql_field = Identifier(field)
 
-    field, value = COMPARISON_OPERATORS[operator](field, value)
-    return field, [value]
+    sql_expr, value = COMPARISON_OPERATORS[operator](sql_field, value)
+    return sql_expr, [value]
 
 
-def _treat_meta_field(field: str, value: Any) -> str:
+def _treat_meta_field(field: str, value: Any) -> Composed:
     """
-    Internal method that modifies the field str
-    to make the meta JSONB field queryable.
+    Internal method that returns a psycopg Composed object to make the meta JSONB field queryable safely.
+
+    Uses psycopg.sql.Literal to embed the field name, preventing SQL injection
+    via metadata field names without requiring regex validation.
+
+    Use the ->> operator to access keys in the meta JSONB field.
 
     Examples:
     >>> _treat_meta_field(field="meta.number", value=9)
-    "(meta->>'number')::integer"
+    Composed([SQL('(meta->>'), Literal('number'), SQL(')::integer')])
 
     >>> _treat_meta_field(field="meta.name", value="my_name")
-    "meta->>'name'"
-    """
+    Composed([SQL('meta->>'), Literal('name')])
 
-    # use the ->> operator to access keys in the meta JSONB field
+    """
     field_name = field.split(".", 1)[-1]
-    field = f"meta->>'{field_name}'"
+
+    # Use SQLLiteral to safely embed the field name as a SQL string literal,
+    # preventing SQL injection via metadata field names.
+    composed: Composed = SQL("meta->>") + SQLLiteral(field_name)
 
     # meta fields are stored as strings in the JSONB field,
     # so we need to cast them to the correct type
@@ -137,25 +144,24 @@ def _treat_meta_field(field: str, value: Any) -> str:
         type_value = PYTHON_TYPES_TO_PG_TYPES.get(type(value[0]))
 
     if type_value:
-        field = f"({field})::{type_value}"
+        composed = SQL("(") + composed + SQL(f")::{type_value}")
 
-    return field
+    return composed
 
 
-def _equal(field: str, value: Any) -> Tuple[str, Any]:
+def _equal(field: Composable, value: Any) -> tuple[Composed, Any]:
     if value is None:
-        # NO_VALUE is a placeholder that will be removed in _convert_filters_to_where_clause_and_params
-        return f"{field} IS NULL", NO_VALUE
-    return f"{field} = %s", value
+        return SQL("{} IS NULL").format(field), NO_VALUE
+    return SQL("{} = %s").format(field), value
 
 
-def _not_equal(field: str, value: Any) -> Tuple[str, Any]:
+def _not_equal(field: Composable, value: Any) -> tuple[Composed, Any]:
     # we use IS DISTINCT FROM to correctly handle NULL values
     # (not handled by !=)
-    return f"{field} IS DISTINCT FROM %s", value
+    return SQL("{} IS DISTINCT FROM %s").format(field), value
 
 
-def _greater_than(field: str, value: Any) -> Tuple[str, Any]:
+def _greater_than(field: Composable, value: Any) -> tuple[Composed, Any]:
     if isinstance(value, str):
         try:
             datetime.fromisoformat(value)
@@ -168,11 +174,10 @@ def _greater_than(field: str, value: Any) -> Tuple[str, Any]:
     if type(value) in [list, Jsonb]:
         msg = f"Filter value can't be of type {type(value)} using operators '>', '>=', '<', '<='"
         raise FilterError(msg)
+    return SQL("{} > %s").format(field), value
 
-    return f"{field} > %s", value
 
-
-def _greater_than_equal(field: str, value: Any) -> Tuple[str, Any]:
+def _greater_than_equal(field: Composable, value: Any) -> tuple[Composed, Any]:
     if isinstance(value, str):
         try:
             datetime.fromisoformat(value)
@@ -185,11 +190,10 @@ def _greater_than_equal(field: str, value: Any) -> Tuple[str, Any]:
     if type(value) in [list, Jsonb]:
         msg = f"Filter value can't be of type {type(value)} using operators '>', '>=', '<', '<='"
         raise FilterError(msg)
+    return SQL("{} >= %s").format(field), value
 
-    return f"{field} >= %s", value
 
-
-def _less_than(field: str, value: Any) -> Tuple[str, Any]:
+def _less_than(field: Composable, value: Any) -> tuple[Composed, Any]:
     if isinstance(value, str):
         try:
             datetime.fromisoformat(value)
@@ -202,11 +206,10 @@ def _less_than(field: str, value: Any) -> Tuple[str, Any]:
     if type(value) in [list, Jsonb]:
         msg = f"Filter value can't be of type {type(value)} using operators '>', '>=', '<', '<='"
         raise FilterError(msg)
+    return SQL("{} < %s").format(field), value
 
-    return f"{field} < %s", value
 
-
-def _less_than_equal(field: str, value: Any) -> Tuple[str, Any]:
+def _less_than_equal(field: Composable, value: Any) -> tuple[Composed, Any]:
     if isinstance(value, str):
         try:
             datetime.fromisoformat(value)
@@ -219,39 +222,37 @@ def _less_than_equal(field: str, value: Any) -> Tuple[str, Any]:
     if type(value) in [list, Jsonb]:
         msg = f"Filter value can't be of type {type(value)} using operators '>', '>=', '<', '<='"
         raise FilterError(msg)
+    return SQL("{} <= %s").format(field), value
 
-    return f"{field} <= %s", value
 
-
-def _not_in(field: str, value: Any) -> Tuple[str, List]:
+def _not_in(field: Composable, value: Any) -> tuple[Composed, list]:
     if not isinstance(value, list):
         msg = f"{field}'s value must be a list when using 'not in' comparator in Pinecone"
         raise FilterError(msg)
+    return SQL("{} IS NULL OR {} != ALL(%s)").format(field, field), [value]
 
-    return f"{field} IS NULL OR {field} != ALL(%s)", [value]
 
-
-def _in(field: str, value: Any) -> Tuple[str, List]:
+def _in(field: Composable, value: Any) -> tuple[Composed, list]:
     if not isinstance(value, list):
         msg = f"{field}'s value must be a list when using 'in' comparator in Pinecone"
         raise FilterError(msg)
 
     # see https://www.psycopg.org/psycopg3/docs/basic/adapt.html#lists-adaptation
-    return f"{field} = ANY(%s)", [value]
+    return SQL("{} = ANY(%s)").format(field), [value]
 
 
-def _like(field: str, value: Any) -> Tuple[str, Any]:
+def _like(field: Composable, value: Any) -> tuple[Composed, Any]:
     if not isinstance(value, str):
         msg = f"{field}'s value must be a str when using 'LIKE' "
         raise FilterError(msg)
-    return f"{field} LIKE %s", value
+    return SQL("{} LIKE %s").format(field), value
 
 
-def _not_like(field: str, value: Any) -> Tuple[str, Any]:
+def _not_like(field: Composable, value: Any) -> tuple[Composed, Any]:
     if not isinstance(value, str):
         msg = f"{field}'s value must be a str when using 'LIKE' "
         raise FilterError(msg)
-    return f"{field} NOT LIKE %s", value
+    return SQL("{} NOT LIKE %s").format(field), value
 
 
 COMPARISON_OPERATORS = {

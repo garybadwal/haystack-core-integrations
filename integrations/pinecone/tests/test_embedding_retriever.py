@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
+
 from unittest.mock import Mock, patch
 
 import pytest
@@ -27,6 +28,11 @@ def test_init_default():
         PineconeEmbeddingRetriever(document_store=mock_store, filter_policy="invalid")
 
 
+def test_init_raises_for_non_pinecone_document_store():
+    with pytest.raises(ValueError, match="document_store must be an instance of PineconeDocumentStore"):
+        PineconeEmbeddingRetriever(document_store="not-a-document-store")
+
+
 @patch("haystack_integrations.document_stores.pinecone.document_store.Pinecone")
 def test_to_dict(mock_pinecone, monkeypatch):
     monkeypatch.setenv("PINECONE_API_KEY", "env-api-key")
@@ -36,6 +42,7 @@ def test_to_dict(mock_pinecone, monkeypatch):
         namespace="test-namespace",
         batch_size=50,
         dimension=512,
+        show_progress=False,
     )
     retriever = PineconeEmbeddingRetriever(document_store=document_store)
     res = retriever.to_dict()
@@ -53,6 +60,7 @@ def test_to_dict(mock_pinecone, monkeypatch):
                     },
                     "index": "default",
                     "namespace": "test-namespace",
+                    "show_progress": False,
                     "batch_size": 50,
                     "dimension": 512,
                     "spec": {"serverless": {"region": "us-east-1", "cloud": "aws"}},

@@ -1,5 +1,46 @@
 # Changelog
 
+## [integrations/watsonx-v1.4.0] - 2026-03-13
+
+### 🚀 Features
+
+- List supported models in `WatsonxChatGenerator` (#2956)
+
+
+## [integrations/watsonx-v1.3.0] - 2026-03-12
+
+### 🚀 Features
+
+- `WatsonXChatGenerator` - support Tools and use the `StreamingChunk` fields (#2902)
+
+### 📚 Documentation
+
+- Simplify pydoc configs (#2855)
+
+### 🧹 Chores
+
+- Remove unused allow-direct-references (#2866)
+
+
+## [integrations/watsonx-v1.2.0] - 2026-01-21
+
+### 🐛 Bug Fixes
+
+- *(watsonx)* Use dataclass replace to avoid modifying input documents (#2766)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+- Make fmt command more forgiving (#2671)
+
+
+## [integrations/watsonx-v1.1.0] - 2025-11-26
+
+### 🧹 Chores
+
+- Update WatsonxChatGenerator default model to ibm/granite-4-h-small (#2558)
+
+
 ## [integrations/watsonx-v1.0.0] - 2025-11-12
 
 ### 🐛 Bug Fixes

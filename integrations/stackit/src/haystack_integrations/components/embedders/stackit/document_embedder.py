@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar
 
 from haystack import component, default_to_dict
 from haystack.components.embedders import OpenAIDocumentEmbedder
@@ -12,6 +12,7 @@ from haystack.utils.auth import Secret
 class STACKITDocumentEmbedder(OpenAIDocumentEmbedder):
     """
     A component for computing Document embeddings using STACKIT as model provider.
+
     The embedding of each Document is stored in the `embedding` field of the Document.
 
     Usage example:
@@ -30,22 +31,30 @@ class STACKITDocumentEmbedder(OpenAIDocumentEmbedder):
     ```
     """
 
+    SUPPORTED_MODELS: ClassVar[list[str]] = [
+        "intfloat/e5-mistral-7b-instruct",
+        "Qwen/Qwen3-VL-Embedding-8B",
+    ]
+    """A non-exhaustive list of embedding models supported by this component.
+    See https://docs.stackit.cloud/products/data-and-ai/ai-model-serving/basics/available-shared-models
+    for the full list."""
+
     def __init__(
         self,
         model: str,
         api_key: Secret = Secret.from_env_var("STACKIT_API_KEY"),
-        api_base_url: Optional[str] = "https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1",
+        api_base_url: str | None = "https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1",
         prefix: str = "",
         suffix: str = "",
         batch_size: int = 32,
         progress_bar: bool = True,
-        meta_fields_to_embed: Optional[List[str]] = None,
+        meta_fields_to_embed: list[str] | None = None,
         embedding_separator: str = "\n",
         *,
-        timeout: Optional[float] = None,
-        max_retries: Optional[int] = None,
-        http_client_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        http_client_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """
         Creates a STACKITDocumentEmbedder component.
 
@@ -99,9 +108,10 @@ class STACKITDocumentEmbedder(OpenAIDocumentEmbedder):
         self.timeout = timeout
         self.max_retries = max_retries
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
+
         :returns:
             Dictionary with serialized data.
         """

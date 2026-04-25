@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from copy import deepcopy
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -18,7 +18,7 @@ from haystack_integrations.document_stores.opensearch import OpenSearchDocumentS
 @component
 class MockedTextEmbedder:
     @component.output_types(embedding=list[float])
-    def run(self, text: str, param_a: str = "default", param_b: str = "another_default") -> Dict[str, Any]:
+    def run(self, text: str, param_a: str = "default", param_b: str = "another_default") -> dict[str, Any]:
         return {"embedding": [0.1, 0.2, 0.3], "metadata": {"text": text, "param_a": param_a, "param_b": param_b}}
 
 
@@ -46,10 +46,14 @@ class TestOpenSearchHybridRetriever:
                     "settings": {"index.knn": True},
                     "create_index": True,
                     "return_embedding": False,
-                    "http_auth": None,
+                    "http_auth": [
+                        {"type": "env_var", "env_vars": ["OPENSEARCH_USERNAME"], "strict": False},
+                        {"type": "env_var", "env_vars": ["OPENSEARCH_PASSWORD"], "strict": False},
+                    ],
                     "use_ssl": None,
                     "verify_certs": None,
                     "timeout": None,
+                    "nested_fields": None,
                 },
             },
             "embedder": {
@@ -88,6 +92,7 @@ class TestOpenSearchHybridRetriever:
             "weights": None,
             "top_k": None,
             "sort_by_score": True,
+            "search_kwargs_embedding": None,
         },
     }
 
@@ -136,6 +141,14 @@ class TestOpenSearchHybridRetriever:
         hybrid = OpenSearchHybridRetriever.from_dict(data)
         assert isinstance(hybrid, OpenSearchHybridRetriever)
         assert hybrid.to_dict()
+
+    def test_from_dict_without_optional_keys(self):
+        data = deepcopy(self.serialised)
+        del data["init_parameters"]["filter_policy_bm25"]
+        del data["init_parameters"]["filter_policy_embedding"]
+        del data["init_parameters"]["join_mode"]
+        hybrid = OpenSearchHybridRetriever.from_dict(data)
+        assert isinstance(hybrid, OpenSearchHybridRetriever)
 
     def test_run(self, mock_embedder):
         # mocked document store
@@ -224,6 +237,7 @@ class TestOpenSearchHybridRetriever:
             top_k=1,
             custom_query=None,
             efficient_filtering=False,
+            search_kwargs=None,
         )
 
     def test_run_in_pipeline(self, mock_embedder):
@@ -256,4 +270,5 @@ class TestOpenSearchHybridRetriever:
             top_k=10,
             custom_query=None,
             efficient_filtering=False,
+            search_kwargs=None,
         )

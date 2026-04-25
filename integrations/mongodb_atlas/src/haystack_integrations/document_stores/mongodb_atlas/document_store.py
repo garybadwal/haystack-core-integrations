@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
+
 import re
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
 
 from haystack import default_from_dict, default_to_dict, logging
 from haystack.dataclasses.document import Document
@@ -22,8 +23,7 @@ logger = logging.getLogger(__name__)
 
 class MongoDBAtlasDocumentStore:
     """
-    A MongoDBAtlasDocumentStore implementation that uses the
-    [MongoDB Atlas](https://www.mongodb.com/atlas/database) service that is easy to deploy, operate, and scale.
+    A MongoDBAtlasDocumentStore backed by [MongoDB Atlas](https://www.mongodb.com/atlas/database).
 
     To connect to MongoDB Atlas, you need to provide a connection string in the format:
     `"mongodb+srv://{mongo_atlas_username}:{mongo_atlas_password}@{mongo_atlas_host}/?{mongo_atlas_params_string}"`.
@@ -67,7 +67,7 @@ class MongoDBAtlasDocumentStore:
         full_text_search_index: str,
         embedding_field: str = "embedding",
         content_field: str = "content",
-    ):
+    ) -> None:
         """
         Creates a new MongoDBAtlasDocumentStore instance.
 
@@ -88,7 +88,7 @@ class MongoDBAtlasDocumentStore:
             [documentation](https://www.mongodb.com/docs/atlas/atlas-search/create-index/).
         :param embedding_field: The name of the field containing document embeddings. Default is "embedding".
         :param content_field: The name of the field containing the document content. Default is "content".
-            This field is allows defining which field to load into the Haystack Document object as content.
+            This field allows defining which field to load into the Haystack Document object as content.
             It can be particularly useful when integrating with an existing collection for retrieval. We discourage
             using this parameter when working with collections created by Haystack.
         :raises ValueError: If the collection name contains invalid characters.
@@ -105,10 +105,10 @@ class MongoDBAtlasDocumentStore:
         self.full_text_search_index = full_text_search_index
         self.embedding_field = embedding_field
         self.content_field = content_field
-        self._connection: Optional[MongoClient] = None
-        self._connection_async: Optional[AsyncMongoClient] = None
-        self._collection: Optional[Collection] = None
-        self._collection_async: Optional[AsyncCollection] = None
+        self._connection: MongoClient | None = None
+        self._connection_async: AsyncMongoClient | None = None
+        self._collection: Collection | None = None
+        self._collection_async: AsyncCollection | None = None
 
     def __del__(self) -> None:
         """
@@ -118,7 +118,8 @@ class MongoDBAtlasDocumentStore:
             self._connection.close()
 
     @property
-    def connection(self) -> Union[AsyncMongoClient, MongoClient]:
+    def connection(self) -> AsyncMongoClient | MongoClient:
+        """Return the active MongoDB client connection."""
         if self._connection:
             return self._connection
         if self._connection_async:
@@ -127,7 +128,8 @@ class MongoDBAtlasDocumentStore:
         raise DocumentStoreError(msg)
 
     @property
-    def collection(self) -> Union[AsyncCollection, Collection]:
+    def collection(self) -> AsyncCollection | Collection:
+        """Return the active MongoDB collection."""
         if self._collection:
             return self._collection
         if self._collection_async:
@@ -229,7 +231,7 @@ class MongoDBAtlasDocumentStore:
             database = self._connection_async[self.database_name]
             self._collection_async = database[self.collection_name]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -246,7 +248,7 @@ class MongoDBAtlasDocumentStore:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MongoDBAtlasDocumentStore":
+    def from_dict(cls, data: dict[str, Any]) -> "MongoDBAtlasDocumentStore":
         """
         Deserializes the component from a dictionary.
 
@@ -278,12 +280,298 @@ class MongoDBAtlasDocumentStore:
         assert self._collection_async is not None
         return await self._collection_async.count_documents({})
 
-    def filter_documents(self, filters: Optional[Dict[str, Any]] = None) -> List[Document]:
+    def count_documents_by_filter(self, filters: dict[str, Any]) -> int:
+        """
+        Applies a filter and counts the documents that matched it.
+
+        :param filters: The filters to apply to the document list.
+        :returns: The number of documents that match the filter.
+        """
+        self._ensure_connection_setup()
+        assert self._collection is not None
+        normalized_filters = _normalize_filters(filters)
+        return self._collection.count_documents(normalized_filters)
+
+    async def count_documents_by_filter_async(self, filters: dict[str, Any]) -> int:
+        """
+        Asynchronously applies a filter and counts the documents that matched it.
+
+        :param filters: The filters to apply to the document list.
+        :returns: The number of documents that match the filter.
+        """
+        await self._ensure_connection_setup_async()
+        assert self._collection_async is not None
+        normalized_filters = _normalize_filters(filters)
+        return await self._collection_async.count_documents(normalized_filters)
+
+    def _create_count_unique_metadata_pipeline(
+        self, filters: dict[str, Any], metadata_fields: list[str]
+    ) -> list[dict[str, Any]]:
+        normalized_filters = _normalize_filters(filters) if filters else {}
+        pipeline = [{"$match": normalized_filters}]
+        facet_stages = {}
+        for field in metadata_fields:
+            # metadata fields are stored in "meta" field in MongoDB
+            mongo_field = f"meta.{field}"
+            facet_stages[field] = [{"$group": {"_id": f"${mongo_field}"}}, {"$count": "count"}]
+
+        pipeline.append({"$facet": facet_stages})
+        return pipeline
+
+    def _process_count_unique_metadata_result(self, result: list[Any], metadata_fields: list[str]) -> dict[str, int]:
+        if not result:
+            return dict.fromkeys(metadata_fields, 0)
+
+        counts = {}
+        for field in metadata_fields:
+            field_result = result[0].get(field, [])
+            counts[field] = field_result[0]["count"] if field_result else 0
+        return counts
+
+    def count_unique_metadata_by_filter(self, filters: dict[str, Any], metadata_fields: list[str]) -> dict[str, int]:
+        """
+        Applies a filter selecting documents and counts the unique values for each meta field of the matched documents.
+
+        :param filters: The filters to apply to the document list.
+        :param metadata_fields: The metadata fields to count unique values for.
+        :returns: A dictionary where the keys are the metadata field names and the values are the count of unique
+        values.
+        """
+        self._ensure_connection_setup()
+        assert self._collection is not None
+
+        pipeline = self._create_count_unique_metadata_pipeline(filters, metadata_fields)
+
+        try:
+            result = list(self._collection.aggregate(pipeline))
+            return self._process_count_unique_metadata_result(result, metadata_fields)
+        except Exception as e:
+            msg = f"Failed to count unique metadata values in MongoDB Atlas: {e}"
+            raise DocumentStoreError(msg) from e
+
+    async def count_unique_metadata_by_filter_async(
+        self, filters: dict[str, Any], metadata_fields: list[str]
+    ) -> dict[str, int]:
+        """
+        Asynchronously applies a filter selecting documents and counts unique metadata values for each meta field.
+
+        :param filters: The filters to apply to the document list.
+        :param metadata_fields: The metadata fields to count unique values for.
+        :returns: A dictionary where the keys are the metadata field names and the values are the count of unique
+        values.
+        """
+        await self._ensure_connection_setup_async()
+        assert self._collection_async is not None
+
+        pipeline = self._create_count_unique_metadata_pipeline(filters, metadata_fields)
+
+        try:
+            cursor = await self._collection_async.aggregate(pipeline)
+            result = await cursor.to_list(length=1)
+            return self._process_count_unique_metadata_result(result, metadata_fields)
+        except Exception as e:
+            msg = f"Failed to count unique metadata values in MongoDB Atlas: {e}"
+            raise DocumentStoreError(msg) from e
+
+    def _compute_metadata_fields_info(self, docs: list[Any]) -> dict[str, dict]:
+        if not docs:
+            return {}
+        # We start with the content field
+        fields_info = {self.content_field: {"type": "text"}}
+        type_mapping = {str: "keyword", int: "long", float: "float", bool: "boolean", list: "list", dict: "object"}
+
+        for doc in docs:
+            if "meta" not in doc:
+                continue
+            for key, value in doc["meta"].items():
+                if key not in fields_info:
+                    fields_info[key] = {"type": type_mapping.get(type(value), "string")}
+        return fields_info
+
+    def get_metadata_fields_info(self) -> dict[str, dict]:
+        """
+        Returns the metadata fields and their corresponding types.
+
+        Since MongoDB is schemaless, this method samples the latest 50 documents to infer the fields and their types.
+
+        :returns: A dictionary where the keys are the metadata field names and the values are dictionary with 'type'.
+        """
+        self._ensure_connection_setup()
+        assert self._collection is not None
+
+        try:
+            # Sample latest 50 documents
+            cursor = self._collection.find({}, {"meta": 1}).sort("_id", -1).limit(50)
+            return self._compute_metadata_fields_info(list(cursor))
+        except Exception as e:
+            msg = f"Failed to get metadata fields info from MongoDB Atlas: {e}"
+            raise DocumentStoreError(msg) from e
+
+    async def get_metadata_fields_info_async(self) -> dict[str, dict]:
+        """
+        Asynchronously returns the metadata fields and their corresponding types.
+
+        Since MongoDB is schemaless, this method samples the latest 50 documents to infer the fields and their types.
+
+        :returns: A dictionary where the keys are the metadata field names and the values are dictionary with 'type'.
+        """
+        await self._ensure_connection_setup_async()
+        assert self._collection_async is not None
+
+        try:
+            # Sample latest 50 documents
+            cursor = self._collection_async.find({}, {"meta": 1}).sort("_id", -1).limit(50)
+            docs = await cursor.to_list(length=50)
+            return self._compute_metadata_fields_info(docs)
+        except Exception as e:
+            msg = f"Failed to get metadata fields info from MongoDB Atlas: {e}"
+            raise DocumentStoreError(msg) from e
+
+    def _create_min_max_pipeline(self, metadata_field: str) -> list[dict[str, Any]]:
+        if metadata_field.startswith("meta."):
+            mongo_field = f"${metadata_field}"
+        else:
+            mongo_field = f"$meta.{metadata_field}"
+        return [
+            {
+                "$group": {
+                    "_id": None,
+                    "min": {"$min": mongo_field},
+                    "max": {"$max": mongo_field},
+                }
+            }
+        ]
+
+    def _process_min_max_result(self, result: list[Any]) -> dict[str, Any]:
+        if not result:
+            return {"min": None, "max": None}
+        return {"min": result[0]["min"], "max": result[0]["max"]}
+
+    def get_metadata_field_min_max(self, metadata_field: str) -> dict[str, Any]:
+        """
+        For a given metadata field, find its max and min value.
+
+        :param metadata_field: The metadata field to get the min and max values for.
+        :returns: A dictionary with 'min' and 'max' keys.
+        """
+        self._ensure_connection_setup()
+        assert self._collection is not None
+
+        pipeline = self._create_min_max_pipeline(metadata_field)
+
+        try:
+            result = list(self._collection.aggregate(pipeline))
+            return self._process_min_max_result(result)
+        except Exception as e:
+            msg = f"Failed to get min/max for field '{metadata_field}' in MongoDB Atlas: {e}"
+            raise DocumentStoreError(msg) from e
+
+    async def get_metadata_field_min_max_async(self, metadata_field: str) -> dict[str, Any]:
+        """
+        Asynchronously for a given metadata field, find its max and min value.
+
+        :param metadata_field: The metadata field to get the min and max values for.
+        :returns: A dictionary with 'min' and 'max' keys.
+        """
+        await self._ensure_connection_setup_async()
+        assert self._collection_async is not None
+
+        pipeline = self._create_min_max_pipeline(metadata_field)
+
+        try:
+            cursor = await self._collection_async.aggregate(pipeline)
+            result = await cursor.to_list(length=1)
+            return self._process_min_max_result(result)
+        except Exception as e:
+            msg = f"Failed to get min/max for field '{metadata_field}' in MongoDB Atlas: {e}"
+            raise DocumentStoreError(msg) from e
+
+    def _create_unique_values_pipeline(
+        self, metadata_field: str, search_term: str | None, from_: int, size: int
+    ) -> list[dict[str, Any]]:
+        pipeline: list[dict[str, Any]] = [
+            {"$group": {"_id": f"$meta.{metadata_field}"}},
+        ]
+
+        if search_term:
+            pipeline.append({"$match": {"_id": {"$regex": re.escape(search_term), "$options": "i"}}})
+
+        pipeline.append(
+            {
+                "$facet": {
+                    "count": [{"$count": "count"}],
+                    "values": [{"$sort": {"_id": 1}}, {"$skip": from_}, {"$limit": size}],
+                }
+            }
+        )
+        return pipeline
+
+    def _process_unique_values_result(self, result: list[Any]) -> tuple[list[str], int]:
+        if not result or not result[0]["values"]:
+            return [], 0
+
+        values = [doc["_id"] for doc in result[0]["values"]]
+        total_count = result[0]["count"][0]["count"] if result[0]["count"] else 0
+
+        return values, total_count
+
+    def get_metadata_field_unique_values(
+        self, metadata_field: str, search_term: str | None = None, from_: int = 0, size: int = 10
+    ) -> tuple[list[str], int]:
+        """
+        Retrieves unique values for a field matching a search_term or all possible values if no search term is given.
+
+        :param metadata_field: The metadata field to retrieve unique values for.
+        :param search_term: The search term to filter values. Matches as a case-insensitive substring.
+        :param from_: The starting index for pagination.
+        :param size: The number of values to return.
+        :returns: A tuple containing a list of unique values and the total count of unique values matching the
+        search term.
+        """
+        self._ensure_connection_setup()
+        assert self._collection is not None
+
+        pipeline = self._create_unique_values_pipeline(metadata_field, search_term, from_, size)
+
+        try:
+            result = list(self._collection.aggregate(pipeline))
+            return self._process_unique_values_result(result)
+        except Exception as e:
+            msg = f"Failed to get unique values for field '{metadata_field}' in MongoDB Atlas: {e}"
+            raise DocumentStoreError(msg) from e
+
+    async def get_metadata_field_unique_values_async(
+        self, metadata_field: str, search_term: str | None = None, from_: int = 0, size: int = 10
+    ) -> tuple[list[str], int]:
+        """
+        Asynchronously retrieves unique values for a metadata field, optionally filtered by a search term.
+
+        :param metadata_field: The metadata field to retrieve unique values for.
+        :param search_term: The search term to filter values. Matches as a case-insensitive substring.
+        :param from_: The starting index for pagination.
+        :param size: The number of values to return.
+        :returns: A tuple containing a list of unique values and the total count of unique values matching the
+        search term.
+        """
+        await self._ensure_connection_setup_async()
+        assert self._collection_async is not None
+
+        pipeline = self._create_unique_values_pipeline(metadata_field, search_term, from_, size)
+
+        try:
+            cursor = await self._collection_async.aggregate(pipeline)
+            result = await cursor.to_list(length=1)
+            return self._process_unique_values_result(result)
+        except Exception as e:
+            msg = f"Failed to get unique values for field '{metadata_field}' in MongoDB Atlas: {e}"
+            raise DocumentStoreError(msg) from e
+
+    def filter_documents(self, filters: dict[str, Any] | None = None) -> list[Document]:
         """
         Returns the documents that match the filters provided.
 
         For a detailed specification of the filters,
-        refer to the Haystack [documentation](https://docs.haystack.deepset.ai/v2.0/docs/metadata-filtering).
+        refer to the Haystack [documentation](https://docs.haystack.deepset.ai/docs/metadata-filtering).
 
         :param filters: The filters to apply. It returns only the documents that match the filters.
         :returns: A list of Documents that match the given filters.
@@ -294,12 +582,12 @@ class MongoDBAtlasDocumentStore:
         documents = list(self._collection.find(filters))
         return [self._mongo_doc_to_haystack_doc(doc) for doc in documents]
 
-    async def filter_documents_async(self, filters: Optional[Dict[str, Any]] = None) -> List[Document]:
+    async def filter_documents_async(self, filters: dict[str, Any] | None = None) -> list[Document]:
         """
         Asynchronously returns the documents that match the filters provided.
 
         For a detailed specification of the filters,
-        refer to the Haystack [documentation](https://docs.haystack.deepset.ai/v2.0/docs/metadata-filtering).
+        refer to the Haystack [documentation](https://docs.haystack.deepset.ai/docs/metadata-filtering).
 
         :param filters: The filters to apply. It returns only the documents that match the filters.
         :returns: A list of Documents that match the given filters.
@@ -310,7 +598,7 @@ class MongoDBAtlasDocumentStore:
         documents = await self._collection_async.find(filters).to_list()
         return [self._mongo_doc_to_haystack_doc(doc) for doc in documents]
 
-    def write_documents(self, documents: List[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE) -> int:
+    def write_documents(self, documents: list[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE) -> int:
         """
         Writes documents into the MongoDB Atlas collection.
 
@@ -332,7 +620,7 @@ class MongoDBAtlasDocumentStore:
             policy = DuplicatePolicy.FAIL
 
         mongo_documents = [self._haystack_doc_to_mongo_doc(doc) for doc in documents]
-        operations: List[Union[UpdateOne, InsertOne, ReplaceOne]]
+        operations: list[UpdateOne | InsertOne | ReplaceOne]
         written_docs = len(documents)
 
         if policy == DuplicatePolicy.SKIP:
@@ -353,7 +641,7 @@ class MongoDBAtlasDocumentStore:
         return written_docs
 
     async def write_documents_async(
-        self, documents: List[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE
+        self, documents: list[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE
     ) -> int:
         """
         Writes documents into the MongoDB Atlas collection.
@@ -377,7 +665,7 @@ class MongoDBAtlasDocumentStore:
 
         mongo_documents = [self._haystack_doc_to_mongo_doc(doc) for doc in documents]
 
-        operations: List[Union[UpdateOne, InsertOne, ReplaceOne]]
+        operations: list[UpdateOne | InsertOne | ReplaceOne]
         written_docs = len(documents)
 
         if policy == DuplicatePolicy.SKIP:
@@ -399,7 +687,7 @@ class MongoDBAtlasDocumentStore:
 
         return written_docs
 
-    def delete_documents(self, document_ids: List[str]) -> None:
+    def delete_documents(self, document_ids: list[str]) -> None:
         """
         Deletes all documents with a matching document_ids from the document store.
 
@@ -411,7 +699,7 @@ class MongoDBAtlasDocumentStore:
             return
         self._collection.delete_many(filter={"id": {"$in": document_ids}})
 
-    async def delete_documents_async(self, document_ids: List[str]) -> None:
+    async def delete_documents_async(self, document_ids: list[str]) -> None:
         """
         Asynchronously deletes all documents with a matching document_ids from the document store.
 
@@ -423,7 +711,7 @@ class MongoDBAtlasDocumentStore:
             return
         await self._collection_async.delete_many(filter={"id": {"$in": document_ids}})
 
-    def delete_by_filter(self, filters: Dict[str, Any]) -> int:
+    def delete_by_filter(self, filters: dict[str, Any]) -> int:
         """
         Deletes all documents that match the provided filters.
 
@@ -448,7 +736,7 @@ class MongoDBAtlasDocumentStore:
             msg = f"Failed to delete documents by filter from MongoDB Atlas: {e!s}"
             raise DocumentStoreError(msg) from e
 
-    async def delete_by_filter_async(self, filters: Dict[str, Any]) -> int:
+    async def delete_by_filter_async(self, filters: dict[str, Any]) -> int:
         """
         Asynchronously deletes all documents that match the provided filters.
 
@@ -473,7 +761,7 @@ class MongoDBAtlasDocumentStore:
             msg = f"Failed to delete documents by filter from MongoDB Atlas: {e!s}"
             raise DocumentStoreError(msg) from e
 
-    def update_by_filter(self, filters: Dict[str, Any], meta: Dict[str, Any]) -> int:
+    def update_by_filter(self, filters: dict[str, Any], meta: dict[str, Any]) -> int:
         """
         Updates the metadata of all documents that match the provided filters.
 
@@ -502,7 +790,7 @@ class MongoDBAtlasDocumentStore:
             msg = f"Failed to update documents by filter in MongoDB Atlas: {e!s}"
             raise DocumentStoreError(msg) from e
 
-    async def update_by_filter_async(self, filters: Dict[str, Any], meta: Dict[str, Any]) -> int:
+    async def update_by_filter_async(self, filters: dict[str, Any], meta: dict[str, Any]) -> int:
         """
         Asynchronously updates the metadata of all documents that match the provided filters.
 
@@ -635,10 +923,10 @@ class MongoDBAtlasDocumentStore:
 
     def _embedding_retrieval(
         self,
-        query_embedding: List[float],
-        filters: Optional[Dict[str, Any]] = None,
+        query_embedding: list[float],
+        filters: dict[str, Any] | None = None,
         top_k: int = 10,
-    ) -> List[Document]:
+    ) -> list[Document]:
         """
         Find the documents that are most similar to the provided `query_embedding` by using a vector similarity metric.
 
@@ -657,7 +945,7 @@ class MongoDBAtlasDocumentStore:
 
         filters = _normalize_filters(filters) if filters else {}
 
-        pipeline: List[Dict[str, Any]] = [
+        pipeline: list[dict[str, Any]] = [
             {
                 "$vectorSearch": {
                     "index": self.vector_search_index,
@@ -686,11 +974,10 @@ class MongoDBAtlasDocumentStore:
         return documents
 
     async def _embedding_retrieval_async(
-        self, query_embedding: List[float], filters: Optional[Dict[str, Any]] = None, top_k: int = 10
-    ) -> List[Document]:
+        self, query_embedding: list[float], filters: dict[str, Any] | None = None, top_k: int = 10
+    ) -> list[Document]:
         """
-        Asynchronously find the documents that are most similar to the provided `query_embedding` by using a vector
-        similarity metric.
+        Asynchronously find the documents most similar to the provided `query_embedding` using vector similarity.
 
         :param query_embedding: Embedding of the query
         :param filters: Optional filters.
@@ -707,7 +994,7 @@ class MongoDBAtlasDocumentStore:
 
         filters = _normalize_filters(filters) if filters else {}
 
-        pipeline: List[Dict[str, Any]] = [
+        pipeline: list[dict[str, Any]] = [
             {
                 "$vectorSearch": {
                     "index": self.vector_search_index,
@@ -738,14 +1025,14 @@ class MongoDBAtlasDocumentStore:
 
     def _fulltext_retrieval(
         self,
-        query: Union[str, List[str]],
-        fuzzy: Optional[Dict[str, int]] = None,
-        match_criteria: Optional[Literal["any", "all"]] = None,
-        score: Optional[Dict[str, Dict]] = None,
-        synonyms: Optional[str] = None,
-        filters: Optional[Dict[str, Any]] = None,
+        query: str | list[str],
+        fuzzy: dict[str, int] | None = None,
+        match_criteria: Literal["any", "all"] | None = None,
+        score: dict[str, dict] | None = None,
+        synonyms: str | None = None,
+        filters: dict[str, Any] | None = None,
         top_k: int = 10,
-    ) -> List[Document]:
+    ) -> list[Document]:
         """
         Retrieve documents similar to the provided `query` using a full-text search.
 
@@ -792,7 +1079,7 @@ class MongoDBAtlasDocumentStore:
         filters = _normalize_filters(filters) if filters else {}
 
         # Build the text search options
-        text_search: Dict[str, Any] = {"path": self.content_field or "content", "query": query}
+        text_search: dict[str, Any] = {"path": self.content_field or "content", "query": query}
         if match_criteria:
             text_search["matchCriteria"] = match_criteria
         if synonyms:
@@ -803,7 +1090,7 @@ class MongoDBAtlasDocumentStore:
             text_search["score"] = score
 
         # Define the pipeline for MongoDB aggregation
-        pipeline: List[Dict[str, Any]] = [
+        pipeline: list[dict[str, Any]] = [
             {
                 "$search": {
                     "index": self.full_text_search_index,
@@ -831,14 +1118,14 @@ class MongoDBAtlasDocumentStore:
 
     async def _fulltext_retrieval_async(
         self,
-        query: Union[str, List[str]],
-        fuzzy: Optional[Dict[str, int]] = None,
-        match_criteria: Optional[Literal["any", "all"]] = None,
-        score: Optional[Dict[str, Dict]] = None,
-        synonyms: Optional[str] = None,
-        filters: Optional[Dict[str, Any]] = None,
+        query: str | list[str],
+        fuzzy: dict[str, int] | None = None,
+        match_criteria: Literal["any", "all"] | None = None,
+        score: dict[str, dict] | None = None,
+        synonyms: str | None = None,
+        filters: dict[str, Any] | None = None,
         top_k: int = 10,
-    ) -> List[Document]:
+    ) -> list[Document]:
         """
         Asynchronously retrieve documents similar to the provided `query` using a full-text search asynchronously.
 
@@ -885,7 +1172,7 @@ class MongoDBAtlasDocumentStore:
         filters = _normalize_filters(filters) if filters else {}
 
         # Build the text search options
-        text_search: Dict[str, Any] = {"path": self.content_field or "content", "query": query}
+        text_search: dict[str, Any] = {"path": self.content_field or "content", "query": query}
         if match_criteria:
             text_search["matchCriteria"] = match_criteria
         if synonyms:
@@ -896,7 +1183,7 @@ class MongoDBAtlasDocumentStore:
             text_search["score"] = score
 
         # Define the pipeline for MongoDB aggregation
-        pipeline: List[Dict[str, Any]] = [
+        pipeline: list[dict[str, Any]] = [
             {
                 "$search": {
                     "index": self.full_text_search_index,
@@ -923,7 +1210,7 @@ class MongoDBAtlasDocumentStore:
 
         return [self._mongo_doc_to_haystack_doc(doc) for doc in documents]
 
-    def _mongo_doc_to_haystack_doc(self, mongo_doc: Dict[str, Any]) -> Document:
+    def _mongo_doc_to_haystack_doc(self, mongo_doc: dict[str, Any]) -> Document:
         """
         Converts the dictionary coming out of MongoDB into a Haystack document
 
@@ -937,7 +1224,7 @@ class MongoDBAtlasDocumentStore:
             mongo_doc["embedding"] = mongo_doc.pop(self.embedding_field, None)
         return Document.from_dict(mongo_doc)
 
-    def _haystack_doc_to_mongo_doc(self, haystack_doc: Document) -> Dict[str, Any]:
+    def _haystack_doc_to_mongo_doc(self, haystack_doc: Document) -> dict[str, Any]:
         """
         Parses a Haystack Document to a MongoDB document.
 

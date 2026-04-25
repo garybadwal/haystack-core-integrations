@@ -68,11 +68,19 @@ def _parse_comparison_condition(condition: dict[str, Any]) -> str:
 
 
 def _eq(field: str, value: Any) -> str:
-    return f"{field} eq '{value}'" if isinstance(value, str) and value != "null" else f"{field} eq {value}"
+    if isinstance(value, str) and value != "null":
+        return f"{field} eq '{value}'"
+    if isinstance(value, bool):
+        return f"{field} eq {str(value).lower()}"
+    return f"{field} eq {value}"
 
 
 def _ne(field: str, value: Any) -> str:
-    return f"not ({field} eq '{value}')" if isinstance(value, str) and value != "null" else f"not ({field} eq {value})"
+    if isinstance(value, str) and value != "null":
+        return f"not ({field} eq '{value}')"
+    if isinstance(value, bool):
+        return f"not ({field} eq {str(value).lower()})"
+    return f"not ({field} eq {value})"
 
 
 def _in(field: str, value: Any) -> str:
@@ -97,7 +105,7 @@ def _validate_type(value: Any, operator: str) -> None:
             parser.isoparse(value)
         except ValueError as e:
             raise AzureAISearchDocumentStoreFilterError(msg) from e
-    elif not isinstance(value, (int, float)):
+    elif not isinstance(value, int | float):
         raise AzureAISearchDocumentStoreFilterError(msg)
 
 

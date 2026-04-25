@@ -6,7 +6,6 @@ import os
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
-from typing import Optional
 
 from boto3.session import Session
 from botocore.config import Config
@@ -23,9 +22,9 @@ class S3Storage:
         self,
         s3_bucket: str,
         session: Session,
-        s3_prefix: Optional[str] = None,
-        endpoint_url: Optional[str] = None,
-        config: Optional[Config] = None,
+        s3_prefix: str | None = None,
+        endpoint_url: str | None = None,
+        config: Config | None = None,
     ) -> None:
         """
         Initializes the S3Storage object with the provided parameters.
@@ -54,7 +53,8 @@ class S3Storage:
             raise S3ConfigurationError(msg) from e
 
     def download(self, key: str, local_file_path: Path) -> None:
-        """Download a file from S3.
+        """
+        Download a file from S3.
 
         :param key: The key of the file to download.
         :param local_file_path: The folder path to download the file to.
@@ -100,9 +100,28 @@ class S3Storage:
                 raise S3StorageError(msg) from e
 
     @classmethod
-    def from_env(cls, *, session: Session, config: Config) -> "S3Storage":
-        """Create a S3Storage object from environment variables."""
-        s3_bucket = os.getenv("S3_DOWNLOADER_BUCKET")
+    def from_env(
+        cls, *, session: Session, config: Config, s3_bucket_name_env: str = "S3_DOWNLOADER_BUCKET"
+    ) -> "S3Storage":
+        """
+        Create a S3Storage object from environment variables.
+
+        The following environment variables are read:
+        - `S3_DOWNLOADER_BUCKET` (or the value of `s3_bucket_name_env`): The name of the S3 bucket
+        to download files from. Required — raises `ValueError` if not set.
+        - `S3_DOWNLOADER_PREFIX`: Optional prefix to apply to all S3 keys (e.g. `"folder/subfolder/"`).
+        - `AWS_ENDPOINT_URL`: Optional custom endpoint URL, useful for S3-compatible services
+        such as MinIO or LocalStack.
+
+        :param session: The boto3 `Session` to use when creating the S3 client.
+        :param config: The botocore `Config` to apply to the S3 client.
+        :param s3_bucket_name_env: The name of the environment variable of the S3 bucket to download files from.
+            By default, the value is `"S3_DOWNLOADER_BUCKET"`.
+        :returns: A fully initialized `S3Storage` instance.
+        :raises ValueError: If the environment variable specified by `s3_bucket_name_env` is not set
+            or is empty.
+        """
+        s3_bucket = os.getenv(s3_bucket_name_env)
         if not s3_bucket:
             msg = (
                 "Missing environment variable S3_DOWNLOADER_BUCKET."

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from haystack import component, default_to_dict, logging
 from haystack.components.generators.chat import OpenAIChatGenerator
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class NvidiaChatGenerator(OpenAIChatGenerator):
     """
     Enables text generation using NVIDIA generative models.
+
     For supported models, see [NVIDIA Docs](https://build.nvidia.com/models).
 
     Users can pass any text generation parameters valid for the NVIDIA Chat Completion API
@@ -53,14 +54,14 @@ class NvidiaChatGenerator(OpenAIChatGenerator):
         *,
         api_key: Secret = Secret.from_env_var("NVIDIA_API_KEY"),
         model: str = "meta/llama-3.1-8b-instruct",
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        api_base_url: Optional[str] = os.getenv("NVIDIA_API_URL", DEFAULT_API_URL),
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
-        timeout: Optional[float] = None,
-        max_retries: Optional[int] = None,
-        http_client_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+        streaming_callback: StreamingCallbackT | None = None,
+        api_base_url: str | None = os.getenv("NVIDIA_API_URL", DEFAULT_API_URL),
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        http_client_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """
         Creates an instance of NvidiaChatGenerator.
 
@@ -87,21 +88,22 @@ class NvidiaChatGenerator(OpenAIChatGenerator):
             - `stream`: Whether to stream back partial progress. If set, tokens will be sent as data-only server-sent
                 events as they become available, with the stream terminated by a data: [DONE] message.
             - `response_format`: For NVIDIA NIM servers, this parameter has limited support.
-                - The basic JSON mode with `{"type": "json_object"}` is supported by compatible models, to produce
+                The basic JSON mode with `{"type": "json_object"}` is supported by compatible models, to produce
                 valid JSON output.
-                To pass the JSON schema to the model, use the `guided_json` parameter in `extra_body`.
-                For example:
+                To generate structured JSON output, use the `response_format` parameter.
+                Example:
                 ```python
                 generation_kwargs={
-                    "extra_body": {
-                        "nvext": {
-                            "guided_json": {
-                                json_schema
-                        }
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "my_schema",
+                            "schema": json_schema,
+                        },
                     }
                 }
                 ```
-                For more details, see the [NVIDIA NIM documentation](https://docs.nvidia.com/nim/large-language-models/latest/structured-generation.html).
+                For more details, see the [NVIDIA NIM documentation](https://docs.nvidia.com/nim/vision-language-models/latest/structured-generation.html).
         :param tools:
             A list of tools or a Toolset for which the model can prepare calls. This parameter can accept either a
             list of `Tool` objects or a `Toolset` instance.
@@ -126,7 +128,7 @@ class NvidiaChatGenerator(OpenAIChatGenerator):
             http_client_kwargs=http_client_kwargs,
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize this component to a dictionary.
 

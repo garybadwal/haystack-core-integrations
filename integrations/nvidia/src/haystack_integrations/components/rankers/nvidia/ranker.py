@@ -4,7 +4,8 @@
 
 import os
 import warnings
-from typing import Any, Dict, List, Optional, Union
+from dataclasses import replace
+from typing import Any
 
 from haystack import Document, component, default_from_dict, default_to_dict, logging
 from haystack.utils import Secret, deserialize_secrets_inplace
@@ -18,8 +19,7 @@ logger = logging.getLogger(__name__)
 @component
 class NvidiaRanker:
     """
-    A component for ranking documents using ranking models provided by
-    [NVIDIA NIMs](https://ai.nvidia.com).
+    A component for ranking documents using ranking models provided by [NVIDIA NIMs](https://ai.nvidia.com).
 
     Usage example:
     ```python
@@ -31,7 +31,7 @@ class NvidiaRanker:
         model="nvidia/nv-rerankqa-mistral-4b-v3",
         api_key=Secret.from_env_var("NVIDIA_API_KEY"),
     )
-    ranker.warm_up()
+    # Components warm up automatically on first run.
 
     query = "What is the capital of Germany?"
     documents = [
@@ -47,17 +47,17 @@ class NvidiaRanker:
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        truncate: Optional[Union[RankerTruncateMode, str]] = None,
+        model: str | None = None,
+        truncate: RankerTruncateMode | str | None = None,
         api_url: str = os.getenv("NVIDIA_API_URL", DEFAULT_API_URL),
-        api_key: Optional[Secret] = Secret.from_env_var("NVIDIA_API_KEY"),
+        api_key: Secret | None = Secret.from_env_var("NVIDIA_API_KEY"),
         top_k: int = 5,
         query_prefix: str = "",
         document_prefix: str = "",
-        meta_fields_to_embed: Optional[List[str]] = None,
+        meta_fields_to_embed: list[str] | None = None,
         embedding_separator: str = "\n",
-        timeout: Optional[float] = None,
-    ):
+        timeout: float | None = None,
+    ) -> None:
         """
         Create a NvidiaRanker component.
 
@@ -107,7 +107,7 @@ class NvidiaRanker:
         self.api_url = url_validation(api_url)
         self.top_k = top_k
         self._initialized = False
-        self.backend: Optional[Any] = None
+        self.backend: Any | None = None
         self.is_hosted = is_hosted(api_url)
 
         self.query_prefix = query_prefix
@@ -120,9 +120,10 @@ class NvidiaRanker:
 
     @classmethod
     def class_name(cls) -> str:
+        """Return the class name identifier for serialization."""
         return "NvidiaRanker"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize the ranker to a dictionary.
 
@@ -143,7 +144,7 @@ class NvidiaRanker:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "NvidiaRanker":
+    def from_dict(cls, data: dict[str, Any]) -> "NvidiaRanker":
         """
         Deserialize the ranker from a dictionary.
 
@@ -155,14 +156,14 @@ class NvidiaRanker:
             deserialize_secrets_inplace(data["init_parameters"], keys=["api_key"])
         return default_from_dict(cls, data)
 
-    def warm_up(self):
+    def warm_up(self) -> None:
         """
         Initialize the ranker.
 
         :raises ValueError: If the API key is required for hosted NVIDIA NIMs.
         """
         if not self._initialized:
-            model_kwargs: Dict[str, Any] = {}
+            model_kwargs: dict[str, Any] = {}
             if self.truncate is not None:
                 model_kwargs.update(truncate=str(self.truncate))
             self.backend = NimBackend(
@@ -179,7 +180,7 @@ class NvidiaRanker:
                     self.model = self.backend.model
             self._initialized = True
 
-    def _prepare_documents_to_embed(self, documents: List[Document]) -> List[str]:
+    def _prepare_documents_to_embed(self, documents: list[Document]) -> list[str]:
         document_texts = []
         for doc in documents:
             meta_values_to_embed = [
@@ -191,13 +192,8 @@ class NvidiaRanker:
             document_texts.append(self.document_prefix + text_to_embed)
         return document_texts
 
-    @component.output_types(documents=List[Document])
-    def run(
-        self,
-        query: str,
-        documents: List[Document],
-        top_k: Optional[int] = None,
-    ) -> Dict[str, List[Document]]:
+    @component.output_types(documents=list[Document])
+    def run(self, query: str, documents: list[Document], top_k: int | None = None) -> dict[str, list[Document]]:
         """
         Rank a list of documents based on a given query.
 
@@ -205,14 +201,13 @@ class NvidiaRanker:
         :param documents: The list of documents to rank.
         :param top_k: The number of documents to return.
 
-        :raises RuntimeError: If the ranker has not been loaded.
         :raises TypeError: If the arguments are of the wrong type.
 
         :returns: A dictionary containing the ranked documents.
         """
         if not self._initialized:
-            msg = "The ranker has not been loaded. Please call warm_up() before running."
-            raise RuntimeError(msg)
+            self.warm_up()
+
         if not isinstance(query, str):
             msg = "NvidiaRanker expects the `query` parameter to be a string."
             raise TypeError(msg)
@@ -242,11 +237,8 @@ class NvidiaRanker:
 
         # rank result is list[{index: int, logit: float}] sorted by logit
         sorted_indexes_and_scores = self.backend.rank(query_text=query_text, document_texts=document_texts)
-        sorted_documents = []
-        for item in sorted_indexes_and_scores[:top_k]:
-            # mutate (don't copy) the document because we're only updating the score
-            doc = documents[item["index"]]
-            doc.score = item["logit"]
-            sorted_documents.append(doc)
+        sorted_documents = [
+            replace(documents[item["index"]], score=item["logit"]) for item in sorted_indexes_and_scores[:top_k]
+        ]
 
         return {"documents": sorted_documents}

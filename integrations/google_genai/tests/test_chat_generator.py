@@ -1,46 +1,38 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2022-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import base64
+import json
 import os
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
-from google.genai import types
+from haystack.components.agents import Agent
 from haystack.components.generators.utils import print_streaming_chunk
 from haystack.dataclasses import (
     ChatMessage,
     ChatRole,
     ComponentInfo,
+    FileContent,
     ImageContent,
     ReasoningContent,
     StreamingChunk,
+    TextContent,
     ToolCall,
 )
-from haystack.tools import Tool, Toolset
+from haystack.tools import Tool, Toolset, create_tool_from_function
 from haystack.utils.auth import Secret
+from pydantic import BaseModel
 
 from haystack_integrations.components.generators.google_genai.chat.chat_generator import (
     GoogleGenAIChatGenerator,
-    _convert_message_to_google_genai_format,
 )
-
-
-@pytest.fixture
-def chat_messages():
-    return [
-        ChatMessage.from_system("You are a helpful assistant"),
-        ChatMessage.from_user("What's the capital of France"),
-    ]
 
 
 def weather(city: str):
     """Get weather information for a city."""
     return f"Weather in {city}: 22°C, sunny"
-
-
-def population(city: str) -> str:
-    return f"The population of {city} is 2.2 million"
 
 
 @pytest.fixture
@@ -55,346 +47,75 @@ def tools():
     ]
 
 
-class TestStreamingChunkConversion:
-    def test_convert_google_chunk_to_streaming_chunk_text_only(self, monkeypatch):
-        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
-        component = GoogleGenAIChatGenerator()
-        component_info = ComponentInfo.from_component(component)
+@pytest.fixture
+def mock_response():
+    mock_part = Mock()
+    mock_part.text = "Hello"
+    mock_part.function_call = None
+    mock_part.thought = False
+    mock_part.thought_signature = None
 
-        mock_chunk = Mock()
-        mock_candidate = Mock()
-        mock_candidate.finish_reason = "STOP"
-        mock_chunk.candidates = [mock_candidate]
+    mock_content = Mock()
+    mock_content.parts = [mock_part]
+    mock_candidate = Mock()
+    mock_candidate.content = mock_content
+    mock_candidate.finish_reason = "STOP"
 
-        mock_content = Mock()
-        mock_content.parts = []
+    mock_usage = Mock()
+    mock_usage.prompt_token_count = 10
+    mock_usage.candidates_token_count = 5
+    mock_usage.total_token_count = 15
+    mock_usage.thoughts_token_count = None
+    mock_usage.cached_content_token_count = None
+
+    resp = Mock()
+    resp.candidates = [mock_candidate]
+    resp.usage_metadata = mock_usage
+    return resp
+
+
+@pytest.fixture
+def mock_streaming_chunk():
+    def _make(text="Hello", finish_reason=None):
         mock_part = Mock()
-        mock_part.text = "Hello, world!"
+        mock_part.text = text
         mock_part.function_call = None
-        # Explicitly set thought=False to simulate a regular (non-thought) part
         mock_part.thought = False
-        mock_content.parts.append(mock_part)
-        mock_candidate.content = mock_content
-
-        chunk = component._convert_google_chunk_to_streaming_chunk(
-            chunk=mock_chunk,
-            index=0,
-            component_info=component_info,
-        )
-
-        assert chunk.content == "Hello, world!"
-        assert chunk.tool_calls == []
-        assert chunk.finish_reason == "stop"
-        assert chunk.index == 0
-        assert "received_at" in chunk.meta
-        assert chunk.component_info == component_info
-
-    def test_convert_google_chunk_to_streaming_chunk_tool_call(self, monkeypatch):
-        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
-        component = GoogleGenAIChatGenerator()
-        component_info = ComponentInfo.from_component(component)
-
-        mock_chunk = Mock()
-        mock_candidate = Mock()
-        mock_candidate.finish_reason = "STOP"
-        mock_chunk.candidates = [mock_candidate]
+        mock_part.thought_signature = None
 
         mock_content = Mock()
-        mock_content.parts = []
-        mock_part = Mock()
-        mock_part.text = None
-        mock_function_call = Mock()
-        mock_function_call.name = "weather"
-        mock_function_call.args = {"city": "Paris"}
-        mock_function_call.id = "call_123"
-        mock_part.function_call = mock_function_call
-        mock_content.parts.append(mock_part)
-        mock_candidate.content = mock_content
-
-        chunk = component._convert_google_chunk_to_streaming_chunk(
-            chunk=mock_chunk, index=0, component_info=component_info
-        )
-
-        assert chunk.content == ""
-        assert chunk.tool_calls is not None
-        assert len(chunk.tool_calls) == 1
-        assert chunk.tool_calls[0].tool_name == "weather"
-        assert chunk.tool_calls[0].arguments == '{"city": "Paris"}'
-        assert chunk.tool_calls[0].id == "call_123"
-        assert chunk.finish_reason == "stop"
-        assert chunk.index == 0
-        assert "received_at" in chunk.meta
-        assert chunk.component_info == component_info
-
-    def test_convert_google_chunk_to_streaming_chunk_mixed_content(self, monkeypatch):
-        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
-        component = GoogleGenAIChatGenerator()
-        component_info = ComponentInfo.from_component(component)
-
-        mock_chunk = Mock()
+        mock_content.parts = [mock_part]
         mock_candidate = Mock()
-        mock_candidate.finish_reason = "STOP"
-        mock_chunk.candidates = [mock_candidate]
-
-        mock_content = Mock()
-        mock_content.parts = []
-
-        mock_text_part = Mock()
-        mock_text_part.text = "I'll check the weather for you."
-        mock_text_part.function_call = None
-        # Explicitly set thought=False to simulate a regular (non-thought) part
-        mock_text_part.thought = False
-        mock_content.parts.append(mock_text_part)
-
-        mock_tool_part = Mock()
-        mock_tool_part.text = None
-        mock_function_call = Mock()
-        mock_function_call.name = "weather"
-        mock_function_call.args = {"city": "London"}
-        mock_function_call.id = "call_456"
-        mock_tool_part.function_call = mock_function_call
-        mock_content.parts.append(mock_tool_part)
-
+        mock_candidate.finish_reason = finish_reason
         mock_candidate.content = mock_content
 
-        chunk = component._convert_google_chunk_to_streaming_chunk(
-            chunk=mock_chunk, index=0, component_info=component_info
-        )
+        chunk = Mock()
+        chunk.candidates = [mock_candidate]
+        chunk.usage_metadata = None
+        return chunk
 
-        # When both text and tool calls are present, tool calls are prioritized
-        assert chunk.content == ""
-        assert chunk.tool_calls is not None
-        assert len(chunk.tool_calls) == 1
-        assert chunk.tool_calls[0].tool_name == "weather"
-        assert chunk.tool_calls[0].arguments == '{"city": "London"}'
-        assert chunk.finish_reason == "stop"
-        assert chunk.component_info == component_info
-
-    def test_convert_google_chunk_to_streaming_chunk_empty_parts(self, monkeypatch):
-        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
-        component = GoogleGenAIChatGenerator()
-        component_info = ComponentInfo.from_component(component)
-
-        mock_chunk = Mock()
-        mock_candidate = Mock()
-        mock_content = Mock()
-        mock_content.parts = []
-        mock_candidate.content = mock_content
-        mock_chunk.candidates = [mock_candidate]
-
-        chunk = component._convert_google_chunk_to_streaming_chunk(
-            chunk=mock_chunk, index=0, component_info=component_info
-        )
-
-        assert chunk.content == ""
-        assert chunk.tool_calls == []
-        assert chunk.component_info == component_info
-
-    def test_convert_google_chunk_to_streaming_chunk_real_example(self, monkeypatch):
-        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
-        component = GoogleGenAIChatGenerator()
-        component_info = ComponentInfo.from_component(component)
-
-        # Chunk 1: Text only
-        chunk1_parts = [
-            types.Part(
-                text="I'll get the weather information for Paris and Berlin", function_call=None, function_response=None
-            )
-        ]
-        chunk1_content = types.Content(role="model", parts=chunk1_parts)
-        chunk1_candidate = types.Candidate(
-            content=chunk1_content,
-            finish_reason=None,
-            index=None,
-            safety_ratings=None,
-            citation_metadata=None,
-            grounding_metadata=None,
-            finish_message=None,
-            token_count=None,
-            logprobs_result=None,
-            avg_logprobs=None,
-            url_context_metadata=None,
-        )
-        chunk1_usage = types.GenerateContentResponseUsageMetadata(
-            prompt_token_count=217, candidates_token_count=None, total_token_count=217
-        )
-        chunk1 = types.GenerateContentResponse(
-            candidates=[chunk1_candidate],
-            usage_metadata=chunk1_usage,
-            model_version="gemini-2.0-flash",
-            response_id=None,
-            create_time=None,
-            prompt_feedback=None,
-            automatic_function_calling_history=None,
-            parsed=None,
-        )
-
-        streaming_chunk1 = component._convert_google_chunk_to_streaming_chunk(
-            chunk=chunk1, index=0, component_info=component_info
-        )
-        assert streaming_chunk1.content == "I'll get the weather information for Paris and Berlin"
-        assert streaming_chunk1.tool_calls == []
-        assert streaming_chunk1.finish_reason is None
-        assert streaming_chunk1.index == 0
-        assert "received_at" in streaming_chunk1.meta
-        assert streaming_chunk1.meta["model"] == "gemini-2.0-flash"
-        assert "usage" in streaming_chunk1.meta
-        assert streaming_chunk1.meta["usage"]["prompt_tokens"] == 217
-        assert streaming_chunk1.meta["usage"]["completion_tokens"] is None
-        assert streaming_chunk1.meta["usage"]["total_tokens"] == 217
-        assert streaming_chunk1.component_info == component_info
-
-        # Chunk 2: Text only
-        chunk2_parts = [
-            types.Part(text=" and present it in a structured format.", function_call=None, function_response=None)
-        ]
-        chunk2_content = types.Content(role="model", parts=chunk2_parts)
-        chunk2_candidate = types.Candidate(
-            content=chunk2_content,
-            finish_reason=None,
-            index=None,
-            safety_ratings=None,
-            citation_metadata=None,
-            grounding_metadata=None,
-            finish_message=None,
-            token_count=None,
-            logprobs_result=None,
-            avg_logprobs=None,
-            url_context_metadata=None,
-        )
-        chunk2_usage = types.GenerateContentResponseUsageMetadata(
-            prompt_token_count=217, candidates_token_count=None, total_token_count=217
-        )
-        chunk2 = types.GenerateContentResponse(
-            candidates=[chunk2_candidate],
-            usage_metadata=chunk2_usage,
-            model_version="gemini-2.0-flash",
-            response_id=None,
-            create_time=None,
-            prompt_feedback=None,
-            automatic_function_calling_history=None,
-            parsed=None,
-        )
-
-        streaming_chunk2 = component._convert_google_chunk_to_streaming_chunk(
-            chunk=chunk2, index=1, component_info=component_info
-        )
-        assert streaming_chunk2.content == " and present it in a structured format."
-        assert streaming_chunk2.tool_calls == []
-        assert streaming_chunk2.finish_reason is None
-        assert streaming_chunk2.index == 1
-        assert "received_at" in streaming_chunk2.meta
-        assert streaming_chunk2.meta["model"] == "gemini-2.0-flash"
-        assert "usage" in streaming_chunk2.meta
-        assert streaming_chunk2.meta["usage"]["prompt_tokens"] == 217
-        assert streaming_chunk2.meta["usage"]["completion_tokens"] is None
-        assert streaming_chunk2.meta["usage"]["total_tokens"] == 217
-        assert streaming_chunk2.component_info == component_info
-
-        # Chunk 3: Multiple tool calls (6 function calls) for 2 cities with 3 tools each
-        fc1 = types.FunctionCall(id=None, name="get_weather", args={"city": "Paris"})
-        fc2 = types.FunctionCall(id=None, name="get_population", args={"city": "Paris"})
-        fc3 = types.FunctionCall(id=None, name="get_time", args={"city": "Paris"})
-        fc4 = types.FunctionCall(id=None, name="get_weather", args={"city": "Berlin"})
-        fc5 = types.FunctionCall(id=None, name="get_population", args={"city": "Berlin"})
-        fc6 = types.FunctionCall(id=None, name="get_time", args={"city": "Berlin"})
-
-        parts = [
-            types.Part(text=None, function_call=fc1, function_response=None),
-            types.Part(text=None, function_call=fc2, function_response=None),
-            types.Part(text=None, function_call=fc3, function_response=None),
-            types.Part(text=None, function_call=fc4, function_response=None),
-            types.Part(text=None, function_call=fc5, function_response=None),
-            types.Part(text=None, function_call=fc6, function_response=None),
-        ]
-
-        content = types.Content(role="model", parts=parts)
-        candidate = types.Candidate(
-            content=content,
-            finish_reason=types.FinishReason.STOP,
-            index=None,
-            safety_ratings=None,
-            citation_metadata=None,
-            grounding_metadata=None,
-            finish_message=None,
-            token_count=None,
-            logprobs_result=None,
-            avg_logprobs=None,
-            url_context_metadata=None,
-        )
-
-        usage_metadata = types.GenerateContentResponseUsageMetadata(
-            prompt_token_count=144, candidates_token_count=121, total_token_count=265
-        )
-        chunk = types.GenerateContentResponse(
-            candidates=[candidate],
-            usage_metadata=usage_metadata,
-            model_version="gemini-2.0-flash",
-            response_id=None,
-            create_time=None,
-            prompt_feedback=None,
-            automatic_function_calling_history=None,
-            parsed=None,
-        )
-
-        streaming_chunk = component._convert_google_chunk_to_streaming_chunk(
-            chunk=chunk, index=2, component_info=component_info
-        )
-        assert streaming_chunk.content == ""
-        assert streaming_chunk.tool_calls is not None
-        assert len(streaming_chunk.tool_calls) == 6
-        assert streaming_chunk.finish_reason == "stop"
-        assert streaming_chunk.index == 2
-        assert "received_at" in streaming_chunk.meta
-        assert streaming_chunk.meta["model"] == "gemini-2.0-flash"
-        assert streaming_chunk.component_info == component_info
-        assert "usage" in streaming_chunk.meta
-        assert streaming_chunk.meta["usage"]["prompt_tokens"] == 144
-        assert streaming_chunk.meta["usage"]["completion_tokens"] == 121
-        assert streaming_chunk.meta["usage"]["total_tokens"] == 265
-
-        assert streaming_chunk.tool_calls[0].tool_name == "get_weather"
-        assert streaming_chunk.tool_calls[0].arguments == '{"city": "Paris"}'
-        assert streaming_chunk.tool_calls[0].id is None
-        assert streaming_chunk.tool_calls[0].index == 0
-
-        assert streaming_chunk.tool_calls[1].tool_name == "get_population"
-        assert streaming_chunk.tool_calls[1].arguments == '{"city": "Paris"}'
-        assert streaming_chunk.tool_calls[1].id is None
-        assert streaming_chunk.tool_calls[1].index == 1
-
-        assert streaming_chunk.tool_calls[2].tool_name == "get_time"
-        assert streaming_chunk.tool_calls[2].arguments == '{"city": "Paris"}'
-        assert streaming_chunk.tool_calls[2].id is None
-        assert streaming_chunk.tool_calls[2].index == 2
-
-        assert streaming_chunk.tool_calls[3].tool_name == "get_weather"
-        assert streaming_chunk.tool_calls[3].arguments == '{"city": "Berlin"}'
-        assert streaming_chunk.tool_calls[3].id is None
-        assert streaming_chunk.tool_calls[3].index == 3
-
-        assert streaming_chunk.tool_calls[4].tool_name == "get_population"
-        assert streaming_chunk.tool_calls[4].arguments == '{"city": "Berlin"}'
-        assert streaming_chunk.tool_calls[4].id is None
-        assert streaming_chunk.tool_calls[4].index == 4
-
-        assert streaming_chunk.tool_calls[5].tool_name == "get_time"
-        assert streaming_chunk.tool_calls[5].arguments == '{"city": "Berlin"}'
-        assert streaming_chunk.tool_calls[5].id is None
-        assert streaming_chunk.tool_calls[5].index == 5
+    return _make
 
 
-class TestGoogleGenAIChatGenerator:
+def test_supported_models_is_non_empty_list_of_strings():
+    assert isinstance(GoogleGenAIChatGenerator.SUPPORTED_MODELS, list)
+    assert GoogleGenAIChatGenerator.SUPPORTED_MODELS
+    assert all(isinstance(model, str) and model for model in GoogleGenAIChatGenerator.SUPPORTED_MODELS)
+
+
+class TestGoogleGenAIChatGeneratorInitSerDe:
     def test_init_default(self, monkeypatch):
         monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
         component = GoogleGenAIChatGenerator()
-        assert component._model == "gemini-2.0-flash"
+        assert component._model == "gemini-2.5-flash"
         assert component._generation_kwargs == {}
         assert component._safety_settings == []
         assert component._streaming_callback is None
         assert component._tools is None
         assert component._api_key is not None
         assert component._api_key.resolve_value() == "test-api-key"
+        assert component._timeout is None
+        assert component._max_retries is None
 
     def test_init_fail_wo_api_key(self, monkeypatch):
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
@@ -412,47 +133,29 @@ class TestGoogleGenAIChatGenerator:
         monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key-from-env")
         component = GoogleGenAIChatGenerator(
             api_key=Secret.from_token("test-api-key-from-env"),
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             streaming_callback=print_streaming_chunk,
             generation_kwargs={"temperature": 0.5, "max_output_tokens": 100},
             safety_settings=[{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}],
             tools=[tool],
+            timeout=30.0,
+            max_retries=5,
         )
-        assert component._model == "gemini-2.0-flash"
+        assert component._model == "gemini-2.5-flash"
         assert component._streaming_callback is print_streaming_chunk
         assert component._generation_kwargs == {"temperature": 0.5, "max_output_tokens": 100}
         assert component._safety_settings == [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
         ]
         assert component._tools == [tool]
+        assert component._timeout == 30.0
+        assert component._max_retries == 5
 
     def test_init_with_toolset(self, tools, monkeypatch):
         monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
         toolset = Toolset(tools)
-        generator = GoogleGenAIChatGenerator(model="gemini-2.0-flash", tools=toolset)
+        generator = GoogleGenAIChatGenerator(tools=toolset)
         assert generator._tools == toolset
-
-    def test_to_dict_with_toolset(self, tools, monkeypatch):
-        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
-        toolset = Toolset(tools)
-        generator = GoogleGenAIChatGenerator(model="gemini-2.0-flash", tools=toolset)
-        data = generator.to_dict()
-
-        assert data["init_parameters"]["tools"]["type"] == "haystack.tools.toolset.Toolset"
-        assert "tools" in data["init_parameters"]["tools"]["data"]
-        assert len(data["init_parameters"]["tools"]["data"]["tools"]) == len(tools)
-
-    def test_from_dict_with_toolset(self, tools, monkeypatch):
-        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
-        toolset = Toolset(tools)
-        component = GoogleGenAIChatGenerator(model="gemini-2.0-flash", tools=toolset)
-        data = component.to_dict()
-
-        deserialized_component = GoogleGenAIChatGenerator.from_dict(data)
-
-        assert isinstance(deserialized_component._tools, Toolset)
-        assert len(deserialized_component._tools) == len(tools)
-        assert all(isinstance(tool, Tool) for tool in deserialized_component._tools)
 
     def test_init_with_mixed_tools_and_toolsets(self, monkeypatch):
         """Test initialization with a mixed list of Tools and Toolsets."""
@@ -480,7 +183,7 @@ class TestGoogleGenAIChatGenerator:
         toolset1 = Toolset([tool2])
 
         # Initialize with mixed list: Tool, Toolset, Tool
-        generator = GoogleGenAIChatGenerator(model="gemini-2.0-flash", tools=[tool1, toolset1, tool3])
+        generator = GoogleGenAIChatGenerator(tools=[tool1, toolset1, tool3])
 
         assert generator._tools == [tool1, toolset1, tool3]
         assert isinstance(generator._tools, list)
@@ -488,6 +191,30 @@ class TestGoogleGenAIChatGenerator:
         assert isinstance(generator._tools[0], Tool)
         assert isinstance(generator._tools[1], Toolset)
         assert isinstance(generator._tools[2], Tool)
+
+    def test_to_dict_with_toolset(self, tools, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        toolset = Toolset(tools)
+        generator = GoogleGenAIChatGenerator(tools=toolset)
+        data = generator.to_dict()
+
+        assert data["init_parameters"]["tools"]["type"] == "haystack.tools.toolset.Toolset"
+        assert "tools" in data["init_parameters"]["tools"]["data"]
+        assert len(data["init_parameters"]["tools"]["data"]["tools"]) == len(tools)
+        assert data["init_parameters"]["timeout"] is None
+        assert data["init_parameters"]["max_retries"] is None
+
+    def test_from_dict_with_toolset(self, tools, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        toolset = Toolset(tools)
+        component = GoogleGenAIChatGenerator(tools=toolset)
+        data = component.to_dict()
+
+        deserialized_component = GoogleGenAIChatGenerator.from_dict(data)
+
+        assert isinstance(deserialized_component._tools, Toolset)
+        assert len(deserialized_component._tools) == len(tools)
+        assert all(isinstance(tool, Tool) for tool in deserialized_component._tools)
 
     def test_serde_with_mixed_tools_and_toolsets(self, monkeypatch):
         """Test serialization/deserialization with mixed Tools and Toolsets."""
@@ -508,7 +235,7 @@ class TestGoogleGenAIChatGenerator:
 
         toolset1 = Toolset([tool2])
 
-        generator = GoogleGenAIChatGenerator(model="gemini-2.0-flash", tools=[tool1, toolset1])
+        generator = GoogleGenAIChatGenerator(tools=[tool1, toolset1])
         data = generator.to_dict()
 
         # Verify serialization preserves structure
@@ -526,230 +253,294 @@ class TestGoogleGenAIChatGenerator:
         assert restored._tools[0].name == "tool1"
         assert len(restored._tools[1]) == 1
 
-    def test_convert_message_to_google_genai_format_complex(self):
-        """
-        Test that the GoogleGenAIChatGenerator can convert a complex sequence of ChatMessages to Google GenAI format.
-        In particular, we check that different tool results are handled properly in sequence.
-        """
+    def test_to_dict_with_response_format_pydantic(self, monkeypatch):
+        """Test that to_dict serializes a Pydantic response_format to a JSON schema dict."""
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+
+        class City(BaseModel):
+            name: str
+            country: str
+            population: int
+
+        generator = GoogleGenAIChatGenerator(generation_kwargs={"response_format": City})
+        data = generator.to_dict()
+
+        response_format = data["init_parameters"]["generation_kwargs"]["response_format"]
+        assert response_format == {
+            "properties": {
+                "name": {"title": "Name", "type": "string"},
+                "country": {"title": "Country", "type": "string"},
+                "population": {"title": "Population", "type": "integer"},
+            },
+            "required": ["name", "country", "population"],
+            "title": "City",
+            "type": "object",
+        }
+
+    def test_to_dict_with_response_format_dict(self, monkeypatch):
+        """Test that to_dict preserves a dict response_format as is."""
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        generator = GoogleGenAIChatGenerator(generation_kwargs={"response_format": schema})
+        data = generator.to_dict()
+
+        assert data["init_parameters"]["generation_kwargs"]["response_format"] == schema
+
+    def test_serde_with_response_format(self, monkeypatch):
+        """Test serialization/deserialization round-trip with response_format."""
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        generator = GoogleGenAIChatGenerator(generation_kwargs={"response_format": schema, "temperature": 0.5})
+        data = generator.to_dict()
+
+        restored = GoogleGenAIChatGenerator.from_dict(data)
+        assert restored._generation_kwargs["response_format"] == schema
+        assert restored._generation_kwargs["temperature"] == 0.5
+
+
+class TestGoogleGenAIChatGeneratorRun:
+    def test_run_non_streaming(self, monkeypatch, mock_response):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator()
+        component._client.models.generate_content = Mock(return_value=mock_response)
+
+        results = component.run([ChatMessage.from_user("What's the capital of France?")])
+
+        assert len(results["replies"]) == 1
+        assert results["replies"][0].text == "Hello"
+        assert results["replies"][0].meta["model"] == "gemini-2.5-flash"
+        assert results["replies"][0].meta["finish_reason"] == "stop"
+        component._client.models.generate_content.assert_called_once()
+
+    def test_run_streaming(self, monkeypatch, mock_streaming_chunk):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator()
+
+        chunks = [mock_streaming_chunk(text="Hello"), mock_streaming_chunk(text=" world", finish_reason="STOP")]
+        component._client.models.generate_content_stream = Mock(return_value=iter(chunks))
+
+        callback_chunks = []
+
+        def callback(chunk):
+            callback_chunks.append(chunk)
+
+        results = component.run(
+            [ChatMessage.from_user("Say hello")],
+            streaming_callback=callback,
+        )
+
+        assert len(results["replies"]) == 1
+        assert "Hello" in results["replies"][0].text
+        assert " world" in results["replies"][0].text
+        assert len(callback_chunks) == 2
+
+    def test_run_extracts_system_message(self, monkeypatch, mock_response):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator()
+        component._client.models.generate_content = Mock(return_value=mock_response)
+
         messages = [
-            ChatMessage.from_system("You are good assistant"),
-            ChatMessage.from_user("What's the weather like in Paris? And how much is 2+2?"),
-            ChatMessage.from_assistant(
-                text="",
-                tool_calls=[
-                    ToolCall(id="123", tool_name="weather", arguments={"city": "Paris"}),
-                    ToolCall(id="456", tool_name="math", arguments={"expression": "2+2"}),
-                ],
-            ),
-            ChatMessage.from_tool(
-                tool_result="22° C", origin=ToolCall(id="123", tool_name="weather", arguments={"city": "Paris"})
-            ),
-            ChatMessage.from_tool(
-                tool_result="4", origin=ToolCall(id="456", tool_name="math", arguments={"expression": "2+2"})
-            ),
+            ChatMessage.from_system("You are a helpful assistant"),
+            ChatMessage.from_user("Hello"),
         ]
+        component.run(messages)
 
-        # Test system message handling (should be handled separately in Google GenAI)
-        system_message = messages[0]
-        assert system_message.is_from(ChatRole.SYSTEM)
+        call_kwargs = component._client.models.generate_content.call_args
+        config = call_kwargs.kwargs.get("config") or call_kwargs[1].get("config")
+        assert config.system_instruction == "You are a helpful assistant"
+        # Only the user message should be in contents
+        contents = call_kwargs.kwargs.get("contents") or call_kwargs[1].get("contents")
+        assert len(contents) == 1
 
-        # Test user message conversion
-        user_message = messages[1]
-        google_content = _convert_message_to_google_genai_format(user_message)
-        assert google_content.role == "user"
-        assert len(google_content.parts) == 1
-        assert google_content.parts[0].text == "What's the weather like in Paris? And how much is 2+2?"
+    def test_run_with_tools_passes_tools_to_config(self, monkeypatch, mock_response, tools):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator()
+        component._client.models.generate_content = Mock(return_value=mock_response)
 
-        # Test assistant message with tool calls
-        assistant_message = messages[2]
-        google_content = _convert_message_to_google_genai_format(assistant_message)
-        assert google_content.role == "model"
-        assert len(google_content.parts) == 2
-        assert google_content.parts[0].function_call.name == "weather"
-        assert google_content.parts[0].function_call.args == {"city": "Paris"}
-        assert google_content.parts[1].function_call.name == "math"
-        assert google_content.parts[1].function_call.args == {"expression": "2+2"}
+        component.run([ChatMessage.from_user("Weather in Paris?")], tools=tools)
 
-        # Test tool result messages
-        tool_result_1 = messages[3]
-        google_content = _convert_message_to_google_genai_format(tool_result_1)
-        assert google_content.role == "user"
-        assert len(google_content.parts) == 1
-        assert google_content.parts[0].function_response.name == "weather"
-        assert google_content.parts[0].function_response.response == {"result": "22° C"}
+        call_kwargs = component._client.models.generate_content.call_args
+        config = call_kwargs.kwargs.get("config") or call_kwargs[1].get("config")
+        assert config.tools is not None
 
-        tool_result_2 = messages[4]
-        google_content = _convert_message_to_google_genai_format(tool_result_2)
-        assert google_content.role == "user"
-        assert len(google_content.parts) == 1
-        assert google_content.parts[0].function_response.name == "math"
-        assert google_content.parts[0].function_response.response == {"result": "4"}
+    def test_run_with_safety_settings(self, monkeypatch, mock_response):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        safety = [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}]
+        component = GoogleGenAIChatGenerator()
+        component._client.models.generate_content = Mock(return_value=mock_response)
 
-    def test_convert_message_to_google_genai_format_with_single_image(self, test_files_path):
-        """Test converting a message with a single image to Google GenAI format."""
-        apple_path = test_files_path / "apple.jpg"
-        apple_content = ImageContent.from_file_path(apple_path, size=(100, 100))
+        component.run([ChatMessage.from_user("Hello")], safety_settings=safety)
 
-        message = ChatMessage.from_user(content_parts=["What's in this image?", apple_content])
+        call_kwargs = component._client.models.generate_content.call_args
+        config = call_kwargs.kwargs.get("config") or call_kwargs[1].get("config")
+        assert len(config.safety_settings) == 1
+        assert config.safety_settings[0].category == "HARM_CATEGORY_HARASSMENT"
 
-        google_content = _convert_message_to_google_genai_format(message)
+    def test_run_with_generation_kwargs_override(self, monkeypatch, mock_response):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator(generation_kwargs={"temperature": 0.5})
+        component._client.models.generate_content = Mock(return_value=mock_response)
 
-        assert google_content.role == "user"
-        assert len(google_content.parts) == 2
+        component.run([ChatMessage.from_user("Hello")], generation_kwargs={"temperature": 0.9})
 
-        # First part should be text
-        assert google_content.parts[0].text == "What's in this image?"
+        call_kwargs = component._client.models.generate_content.call_args
+        config = call_kwargs.kwargs.get("config") or call_kwargs[1].get("config")
+        assert config.temperature == 0.9
 
-        # Second part should be image data
-        assert hasattr(google_content.parts[1], "inline_data")
-        assert google_content.parts[1].inline_data is not None
-        assert google_content.parts[1].inline_data.mime_type == "image/jpeg"
-        assert google_content.parts[1].inline_data.data is not None
-        assert len(google_content.parts[1].inline_data.data) > 0
+    def test_run_thinking_error_raises_helpful_message(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator(model="gemini-2.0-flash", generation_kwargs={"thinking_budget": 1024})
+        component._client.models.generate_content = Mock(side_effect=Exception("thinking_config is not supported"))
 
-    def test_convert_message_to_google_genai_format_with_multiple_images(self, test_files_path):
-        """Test converting a message with multiple images in mixed content to Google GenAI format."""
-        apple_path = test_files_path / "apple.jpg"
-        banana_path = test_files_path / "banana.png"
+        with pytest.raises(RuntimeError, match="Thinking configuration error"):
+            component.run([ChatMessage.from_user("Hello")])
 
-        apple_content = ImageContent.from_file_path(apple_path, size=(100, 100))
-        banana_content = ImageContent.from_file_path(banana_path, size=(100, 100))
+    def test_run_generic_error_raises_runtime_error(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator()
+        component._client.models.generate_content = Mock(side_effect=Exception("Connection timeout"))
 
-        message = ChatMessage.from_user(
-            content_parts=[
-                "Compare these fruits. First:",
-                apple_content,
-                "Second:",
-                banana_content,
-                "Which is healthier?",
-            ]
+        with pytest.raises(RuntimeError, match="Error in Google Gen AI chat generation"):
+            component.run([ChatMessage.from_user("Hello")])
+
+    def test_run_streaming_error_raises_runtime_error(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator()
+
+        def failing_stream():
+            msg = "Stream interrupted"
+            raise Exception(msg)
+            yield  # makes this a generator
+
+        component._client.models.generate_content_stream = Mock(return_value=failing_stream())
+
+        with pytest.raises(RuntimeError, match="Error in streaming response"):
+            component.run(
+                [ChatMessage.from_user("Hello")],
+                streaming_callback=lambda chunk: None,
+            )
+
+    def test_from_dict_with_streaming_callback(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator(streaming_callback=print_streaming_chunk)
+        data = component.to_dict()
+
+        restored = GoogleGenAIChatGenerator.from_dict(data)
+        assert restored._streaming_callback is print_streaming_chunk
+
+    @pytest.mark.asyncio
+    async def test_run_async_non_streaming(self, monkeypatch, mock_response):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator()
+        component._client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+        results = await component.run_async([ChatMessage.from_user("Capital of France?")])
+
+        assert len(results["replies"]) == 1
+        assert results["replies"][0].text == "Hello"
+        assert results["replies"][0].meta["finish_reason"] == "stop"
+
+    @pytest.mark.asyncio
+    async def test_run_async_streaming(self, monkeypatch, mock_streaming_chunk):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator()
+
+        chunk = mock_streaming_chunk(text="Hello async", finish_reason="STOP")
+
+        async def mock_stream():
+            yield chunk
+
+        component._client.aio.models.generate_content_stream = AsyncMock(return_value=mock_stream())
+
+        callback_chunks = []
+
+        async def callback(c):
+            callback_chunks.append(c)
+
+        results = await component.run_async(
+            [ChatMessage.from_user("Hello")],
+            streaming_callback=callback,
         )
 
-        google_content = _convert_message_to_google_genai_format(message)
+        assert len(results["replies"]) == 1
+        assert "Hello async" in results["replies"][0].text
+        assert len(callback_chunks) == 1
 
-        assert google_content.role == "user"
-        assert len(google_content.parts) == 5
+    @pytest.mark.asyncio
+    async def test_run_async_extracts_system_message(self, monkeypatch, mock_response):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator()
+        component._client.aio.models.generate_content = AsyncMock(return_value=mock_response)
 
-        # Verify the exact order is preserved
-        assert google_content.parts[0].text == "Compare these fruits. First:"
-
-        # First image (apple)
-        assert hasattr(google_content.parts[1], "inline_data")
-        assert google_content.parts[1].inline_data.mime_type == "image/jpeg"
-        assert google_content.parts[1].inline_data.data is not None
-
-        assert google_content.parts[2].text == "Second:"
-
-        # Second image (banana)
-        assert hasattr(google_content.parts[3], "inline_data")
-        assert google_content.parts[3].inline_data.mime_type == "image/png"
-        assert google_content.parts[3].inline_data.data is not None
-
-        assert google_content.parts[4].text == "Which is healthier?"
-
-    def test_convert_message_to_google_genai_format_image_with_minimal_text(self, test_files_path):
-        """Test converting a message with minimal text and image to Google GenAI format."""
-        apple_path = test_files_path / "apple.jpg"
-        apple_content = ImageContent.from_file_path(apple_path, size=(100, 100))
-
-        # Haystack requires at least one textual part for user messages, so we use minimal text
-        message = ChatMessage.from_user(content_parts=["", apple_content])
-
-        google_content = _convert_message_to_google_genai_format(message)
-
-        assert google_content.role == "user"
-        # Empty text should be filtered out by our implementation, leaving only the image
-        assert len(google_content.parts) == 1
-
-        # Should only have the image part (empty text filtered out)
-        assert hasattr(google_content.parts[0], "inline_data")
-        assert google_content.parts[0].inline_data.mime_type == "image/jpeg"
-        assert google_content.parts[0].inline_data.data is not None
-
-    def test_convert_message_to_google_genai_format_with_thought_signatures(self):
-        """Test converting an assistant message with thought signatures for multi-turn context preservation."""
-
-        # Create an assistant message with tool calls and thought signatures in meta
-        tool_call = ToolCall(id="call_123", tool_name="weather", arguments={"city": "Paris"})
-
-        # Thought signatures are stored in meta when thinking is enabled with tools
-        # They must be base64 encoded as per the API requirements
-        thought_signatures = [
-            {
-                "part_index": 0,
-                "signature": base64.b64encode(b"encrypted_mock_thought_signature_1").decode("utf-8"),
-                "has_text": True,
-                "has_function_call": False,
-                "is_thought": False,
-            },
-            {
-                "part_index": 1,
-                "signature": base64.b64encode(b"encrypted_mock_thought_signature_2").decode("utf-8"),
-                "has_text": False,
-                "has_function_call": True,
-                "is_thought": False,
-            },
+        messages = [
+            ChatMessage.from_system("Be helpful"),
+            ChatMessage.from_user("Hi"),
         ]
+        await component.run_async(messages)
 
-        message = ChatMessage.from_assistant(
-            text="I'll check the weather for you",
-            tool_calls=[tool_call],
-            meta={"thought_signatures": thought_signatures},
+        call_kwargs = component._client.aio.models.generate_content.call_args
+        config = call_kwargs.kwargs.get("config") or call_kwargs[1].get("config")
+        assert config.system_instruction == "Be helpful"
+        contents = call_kwargs.kwargs.get("contents") or call_kwargs[1].get("contents")
+        assert len(contents) == 1
+
+    @pytest.mark.asyncio
+    async def test_run_async_thinking_error_raises_helpful_message(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator(model="gemini-2.0-flash", generation_kwargs={"thinking_budget": 1024})
+        component._client.aio.models.generate_content = AsyncMock(
+            side_effect=Exception("thinking_config is not supported")
         )
 
-        google_content = _convert_message_to_google_genai_format(message)
+        with pytest.raises(RuntimeError, match="Thinking configuration error"):
+            await component.run_async([ChatMessage.from_user("Hello")])
 
-        assert google_content.role == "model"
-        assert len(google_content.parts) == 2
+    @pytest.mark.asyncio
+    async def test_run_async_generic_error_raises_runtime_error(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator()
+        component._client.aio.models.generate_content = AsyncMock(side_effect=Exception("Connection timeout"))
 
-        # First part should have text and its thought signature
-        assert google_content.parts[0].text == "I'll check the weather for you"
-        # thought_signature is returned as bytes from the API
-        assert google_content.parts[0].thought_signature == b"encrypted_mock_thought_signature_1"
+        with pytest.raises(RuntimeError, match="Error in async Google Gen AI chat generation"):
+            await component.run_async([ChatMessage.from_user("Hello")])
 
-        # Second part should have function call and its thought signature
-        assert google_content.parts[1].function_call.name == "weather"
-        assert google_content.parts[1].function_call.args == {"city": "Paris"}
-        assert google_content.parts[1].thought_signature == b"encrypted_mock_thought_signature_2"
+    @pytest.mark.asyncio
+    async def test_run_async_streaming_error_raises_runtime_error(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
+        component = GoogleGenAIChatGenerator()
 
-    def test_convert_message_to_google_genai_format_with_reasoning_content(self):
-        """Test that ReasoningContent is properly skipped during conversion."""
-        # ReasoningContent is for human transparency only, not sent to the API
-        reasoning = ReasoningContent(reasoning_text="Of Life, the Universe and Everything...")
+        async def failing_stream():
+            msg = "Async stream interrupted"
+            raise Exception(msg)
+            yield  # unreachable, but makes this an async generator
 
-        # Create a message with both text and reasoning content
-        message = ChatMessage.from_assistant(text="Forty-two", reasoning=reasoning)
+        component._client.aio.models.generate_content_stream = AsyncMock(return_value=failing_stream())
 
-        google_content = _convert_message_to_google_genai_format(message)
+        with pytest.raises(RuntimeError, match="Error in async streaming response"):
+            await component.run_async(
+                [ChatMessage.from_user("Hello")],
+                streaming_callback=AsyncMock(),
+            )
 
-        assert google_content.role == "model"
-        assert len(google_content.parts) == 1
 
-        # Only the text should be included, reasoning content should be skipped
-        assert google_content.parts[0].text == "Forty-two"
-        # Verify no thought part was created (reasoning is not sent to API)
-        assert not hasattr(google_content.parts[0], "thought") or not google_content.parts[0].thought
-
-    @pytest.mark.skipif(
-        not os.environ.get("GOOGLE_API_KEY", None),
-        reason="Export an env var called GOOGLE_API_KEY containing the Google API key to run this test.",
-    )
-    @pytest.mark.integration
+@pytest.mark.skipif(
+    not os.environ.get("GOOGLE_API_KEY", None),
+    reason="Export an env var called GOOGLE_API_KEY containing the Google API key to run this test.",
+)
+@pytest.mark.integration
+class TestGoogleGenAIChatGeneratorInference:
     def test_live_run(self) -> None:
         chat_messages = [ChatMessage.from_user("What's the capital of France")]
-        component = GoogleGenAIChatGenerator(model="gemini-2.0-flash")
+        component = GoogleGenAIChatGenerator()
         results = component.run(chat_messages)
         assert len(results["replies"]) == 1
         message: ChatMessage = results["replies"][0]
         assert message.text and "paris" in message.text.lower(), "Response does not contain Paris"
-        assert "gemini-2.0-flash" in message.meta["model"]
+        assert "gemini-2.5-flash" in message.meta["model"]
         assert message.meta["finish_reason"] == "stop"
 
-    @pytest.mark.skipif(
-        not os.environ.get("GOOGLE_API_KEY", None),
-        reason="Export an env var called GOOGLE_API_KEY containing the Google API key to run this test.",
-    )
-    @pytest.mark.integration
     def test_run_with_multiple_images_mixed_content(self, test_files_path):
         """Test that multiple images with interleaved text maintain proper ordering."""
         client = GoogleGenAIChatGenerator()
@@ -791,11 +582,44 @@ class TestGoogleGenAIChatGenerator:
             f"Apple should be mentioned before banana in the response. Got: {first_reply.text}"
         )
 
-    @pytest.mark.skipif(
-        not os.environ.get("GOOGLE_API_KEY", None),
-        reason="Export an env var called GOOGLE_API_KEY containing the Google API key to run this test.",
-    )
-    @pytest.mark.integration
+    def test_live_run_with_file_content(self, test_files_path):
+        pdf_path = test_files_path / "sample_pdf_3.pdf"
+
+        file_content = FileContent.from_file_path(file_path=pdf_path)
+
+        chat_messages = [
+            ChatMessage.from_user(
+                content_parts=[file_content, "Is this document a paper about LLMs? Respond with 'yes' or 'no' only."]
+            )
+        ]
+
+        generator = GoogleGenAIChatGenerator()
+        results = generator.run(chat_messages)
+
+        assert len(results["replies"]) == 1
+        message: ChatMessage = results["replies"][0]
+
+        assert message.is_from(ChatRole.ASSISTANT)
+
+        assert message.text
+        indicates_no = any(
+            phrase in message.text.lower()
+            for phrase in (
+                "no",
+                "nope",
+                "not about",
+                "not a paper about",
+                "it is not",
+                "it's not",
+                "the answer is no",
+                "does not",
+                "doesn't",
+                "negative",
+            )
+        )
+
+        assert indicates_no is True
+
     def test_live_run_streaming(self):
         component = GoogleGenAIChatGenerator()
         component_info = ComponentInfo.from_component(component)
@@ -822,11 +646,6 @@ class TestGoogleGenAIChatGenerator:
         assert message.text and "paris" in message.text.lower(), "Response does not contain Paris"
         assert message.meta["finish_reason"] == "stop"
 
-    @pytest.mark.skipif(
-        not os.environ.get("GOOGLE_API_KEY", None),
-        reason="Export an env var called GOOGLE_API_KEY containing the Google API key to run this test.",
-    )
-    @pytest.mark.integration
     def test_live_run_with_tools_streaming(self, tools):
         """
         Integration test that the GoogleGenAIChatGenerator component can run with tools and streaming.
@@ -846,7 +665,7 @@ class TestGoogleGenAIChatGenerator:
         assert tool_message is not None, "No message with tool call found"
         assert tool_message.tool_calls is not None, "Tool message has no tool calls"
         assert len(tool_message.tool_calls) == 1, "Tool message has multiple tool calls"
-        # Google Gen AI (gemini-2.0-flash and gemini-2.5-pro-preview-05-06) does not provide ids for tool calls although
+        # Google Gen AI (gemini-2.5-flash and gemini-2.5-pro-preview-05-06) does not provide ids for tool calls although
         # it is in the response schema, revisit in future to see if there are changes and id is provided
         # assert tool_message.tool_calls[0].id is not None, "Tool call has no id"
         assert tool_message.tool_calls[0].tool_name == "weather"
@@ -854,83 +673,40 @@ class TestGoogleGenAIChatGenerator:
 
         assert isinstance(tool_message, ChatMessage), "Tool message is not a ChatMessage instance"
         assert ChatMessage.is_from(tool_message, ChatRole.ASSISTANT), "Tool message is not from the assistant"
-        assert tool_message.meta["finish_reason"] == "stop"
+        assert tool_message.meta["finish_reason"] == "tool_calls"
 
         tool_call = tool_message.tool_calls[0]
         assert tool_call.tool_name == "weather"
         assert tool_call.arguments == {"city": "Paris"}
 
-    @pytest.mark.skipif(
-        not os.environ.get("GOOGLE_API_KEY", None),
-        reason="Export an env var called GOOGLE_API_KEY containing the Google API key to run this test.",
-    )
-    @pytest.mark.integration
-    def test_live_run_with_toolset(self, tools):
-        """Test that GoogleGenAIChatGenerator can run with a Toolset."""
-        toolset = Toolset(tools)
-        component = GoogleGenAIChatGenerator(tools=toolset)
-
-        messages = [ChatMessage.from_user("What's the weather like in Paris?")]
-        results = component.run(messages)
-
-        assert len(results["replies"]) == 1
-        message = results["replies"][0]
-
-        # Check if tool calls were made
-        assert message.tool_calls is not None, "Message has no tool calls"
-        assert len(message.tool_calls) == 1, "Message has multiple tool calls and it should only have one"
-        tool_call = message.tool_calls[0]
-        # Google Gen AI (gemini-2.0-flash and gemini-2.5-pro-preview-05-06) does not provide ids for tool calls although
-        # it is in the response schema, revisit in future to see if there are changes and id is provided
-        # assert tool_call.id is not None, "Tool call has no id"
-        assert message.meta["finish_reason"] == "stop"
-
-        assert tool_call.tool_name == "weather"
-        assert tool_call.arguments == {"city": "Paris"}
-
-        # Test full conversation with tool result
-        tool_result_message = ChatMessage.from_tool(tool_result="22°C, sunny", origin=tool_call)
-        follow_up_messages = [*messages, message, tool_result_message]
-        final_results = component.run(follow_up_messages)
-
-        assert len(final_results["replies"]) == 1
-        final_message = final_results["replies"][0]
-        assert final_message.text
-        assert "paris" in final_message.text.lower() or "weather" in final_message.text.lower(), (
-            "Response does not contain Paris or weather"
-        )
-
-    @pytest.mark.skipif(
-        not os.environ.get("GOOGLE_API_KEY", None),
-        reason="Export an env var called GOOGLE_API_KEY containing the Google API key to run this test.",
-    )
-    @pytest.mark.integration
     def test_live_run_with_parallel_tools(self, tools):
         """
         Integration test that the GoogleGenAIChatGenerator component can run with parallel tools.
         """
-        initial_messages = [ChatMessage.from_user("What's the weather like in Paris and Berlin?")]
-        component = GoogleGenAIChatGenerator(tools=tools)
+        initial_messages = [
+            ChatMessage.from_user(
+                "What's the weather like in Paris and Berlin? Produce a separate tool call for each city."
+            )
+        ]
+        component = GoogleGenAIChatGenerator(model="gemini-3-flash-preview", tools=tools)
         results = component.run(messages=initial_messages)
 
         assert len(results["replies"]) == 1
         message = results["replies"][0]
+        assert message.meta["finish_reason"] == "tool_calls"
 
         # Google GenAI should make tool calls for both cities
         assert len(message.tool_calls) == 2
-        tool_call_paris = (
-            message.tool_calls[0] if message.tool_calls[0].arguments["city"] == "Paris" else message.tool_calls[1]
-        )
+        paris_index = 0 if message.tool_calls[0].arguments["city"].lower() == "paris" else 1
+        tool_call_paris = message.tool_calls[paris_index]
         assert isinstance(tool_call_paris, ToolCall)
         assert tool_call_paris.tool_name == "weather"
-        assert tool_call_paris.arguments["city"] == "Paris"
-        assert message.meta["finish_reason"] == "stop"
+        assert tool_call_paris.arguments["city"].lower() == "paris"
 
-        tool_call_berlin = message.tool_calls[1]
+        tool_call_berlin = message.tool_calls[1 - paris_index]
         assert isinstance(tool_call_berlin, ToolCall)
         assert tool_call_berlin.tool_name == "weather"
-        assert tool_call_berlin.arguments["city"] == "Berlin"
-        assert message.meta["finish_reason"] == "stop"
+        assert tool_call_berlin.arguments["city"].lower() == "berlin"
 
         # Google GenAI expects results from both tools in separate messages
         new_messages = [
@@ -942,122 +718,23 @@ class TestGoogleGenAIChatGenerator:
 
         # Response from the model contains results from both tools
         results = component.run(new_messages)
-        message = results["replies"][0]
-
-        assert not message.tool_calls, "Message has tool calls and it should not have any"
-        assert len(message.text) > 0, "Message has no text"
-        assert message.text and ("paris" in message.text.lower() or "berlin" in message.text.lower())
-        # Check that the response mentions both temperature readings
-        assert "22" in message.text or "15" in message.text
-
-    @pytest.mark.skipif(
-        not os.environ.get("GOOGLE_API_KEY", None),
-        reason="Export an env var called GOOGLE_API_KEY containing the Google API key to run this test.",
-    )
-    @pytest.mark.integration
-    def test_live_run_with_mixed_tools(self):
-        """
-        Integration test that verifies GoogleGenAIChatGenerator works with mixed Tool and Toolset.
-        This tests that the LLM can correctly invoke tools from both a standalone Tool and a Toolset.
-        """
-        weather_tool = Tool(
-            name="weather",
-            description="useful to determine the weather in a given location",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                        "description": "The name of the city to get weather for, e.g. Paris, London",
-                    }
-                },
-                "required": ["city"],
-            },
-            function=weather,
-        )
-
-        population_tool = Tool(
-            name="population",
-            description="useful to determine the population of a given city",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                        "description": "The name of the city to get population for, e.g. Paris, Berlin",
-                    }
-                },
-                "required": ["city"],
-            },
-            function=population,
-        )
-
-        # Create a toolset with the population tool
-        population_toolset = Toolset([population_tool])
-
-        # Mix standalone tool with toolset
-        mixed_tools = [weather_tool, population_toolset]
-
-        initial_messages = [
-            ChatMessage.from_user("What's the weather like in Paris and what is the population of Berlin?")
-        ]
-        component = GoogleGenAIChatGenerator(tools=mixed_tools)
-        results = component.run(messages=initial_messages)
-
-        assert len(results["replies"]) > 0, "No replies received"
-
-        first_reply = results["replies"][0]
-        assert isinstance(first_reply, ChatMessage), "First reply is not a ChatMessage instance"
-        assert ChatMessage.is_from(first_reply, ChatRole.ASSISTANT), "First reply is not from the assistant"
-        assert first_reply.tool_calls, "First reply has no tool calls"
-
-        tool_calls = first_reply.tool_calls
-        assert len(tool_calls) == 2, f"Expected 2 tool calls, got {len(tool_calls)}"
-
-        # Verify we got calls to both weather and population tools
-        tool_names = {tc.tool_name for tc in tool_calls}
-        assert "weather" in tool_names, "Expected 'weather' tool call"
-        assert "population" in tool_names, "Expected 'population' tool call"
-
-        # Verify tool call details
-        for tool_call in tool_calls:
-            # Google GenAI may not provide IDs for tool calls
-            assert tool_call.tool_name in ["weather", "population"]
-            assert "city" in tool_call.arguments
-            assert tool_call.arguments["city"] in ["Paris", "Berlin"]
-            assert first_reply.meta["finish_reason"] == "stop"
-
-        # Mock the response we'd get from ToolInvoker
-        tool_result_messages = []
-        for tool_call in tool_calls:
-            if tool_call.tool_name == "weather":
-                result = "The weather in Paris is sunny and 32°C"
-            else:  # population
-                result = "The population of Berlin is 2.2 million"
-            tool_result_messages.append(ChatMessage.from_tool(tool_result=result, origin=tool_call))
-
-        new_messages = [*initial_messages, first_reply, *tool_result_messages]
-        results = component.run(new_messages)
-
-        assert len(results["replies"]) == 1
         final_message = results["replies"][0]
-        assert not final_message.tool_calls
-        assert len(final_message.text) > 0
-        assert "paris" in final_message.text.lower()
-        assert "berlin" in final_message.text.lower()
 
-    @pytest.mark.skipif(
-        not os.environ.get("GOOGLE_API_KEY", None),
-        reason="Export an env var called GOOGLE_API_KEY containing the Google API key to run this test.",
-    )
-    @pytest.mark.integration
+        assert not final_message.tool_calls, "Message has tool calls and it should not have any"
+        assert len(final_message.text) > 0, "Message has no text"
+        assert final_message.text and "paris" in final_message.text.lower() and "berlin" in final_message.text.lower()
+        # Check that the response mentions both temperature readings
+        assert "22" in final_message.text and "15" in final_message.text
+
     def test_live_run_with_thinking(self):
         """
         Integration test for the thinking feature with a model that supports it.
         """
         # We use a model that supports the thinking feature
         chat_messages = [ChatMessage.from_user("Why is the sky blue? Explain in one sentence.")]
-        component = GoogleGenAIChatGenerator(model="gemini-2.5-pro", generation_kwargs={"thinking_budget": -1})
+        component = GoogleGenAIChatGenerator(
+            model="gemini-3-flash-preview", generation_kwargs={"thinking_level": "low"}
+        )
         results = component.run(chat_messages)
 
         assert len(results["replies"]) == 1
@@ -1075,11 +752,6 @@ class TestGoogleGenAIChatGenerator:
         assert message.meta["usage"]["thoughts_token_count"] is not None
         assert message.meta["usage"]["thoughts_token_count"] > 0
 
-    @pytest.mark.skipif(
-        not os.environ.get("GOOGLE_API_KEY", None),
-        reason="Export an env var called GOOGLE_API_KEY containing the Google API key to run this test.",
-    )
-    @pytest.mark.integration
     def test_live_run_with_thinking_and_tools_multi_turn(self, tools):
         """
         Integration test for thought signatures preservation in multi-turn conversations with tools.
@@ -1087,12 +759,12 @@ class TestGoogleGenAIChatGenerator:
         """
         # Use a model that supports thinking with tools
         component = GoogleGenAIChatGenerator(
-            model="gemini-2.5-pro",
+            model="gemini-3-flash-preview",
             tools=tools,
-            generation_kwargs={"thinking_budget": -1},  # Dynamic allocation
+            generation_kwargs={"thinking_level": "low"},  # Dynamic allocation
         )
 
-        # First turn: Ask about weather
+        # First turn: Ask about the weather
         messages = [ChatMessage.from_user("What's the weather in Paris?")]
         result = component.run(messages)
 
@@ -1135,16 +807,11 @@ class TestGoogleGenAIChatGenerator:
         # The model should maintain context from previous turns
         assert "22" in second_response.text or "sunny" in second_response.text.lower()
 
-    @pytest.mark.skipif(
-        not os.environ.get("GOOGLE_API_KEY", None),
-        reason="Export an env var called GOOGLE_API_KEY containing the Google API key to run this test.",
-    )
-    @pytest.mark.integration
     def test_live_run_with_thinking_unsupported_model_fails_fast(self):
         """
         Integration test to verify that thinking configuration fails fast with unsupported models.
         """
-        # gemini-2.0-flash is known to not support thinking
+        # gemini-2.0-flash does not support thinking
         chat_messages = [ChatMessage.from_user("Why is the sky blue?")]
         component = GoogleGenAIChatGenerator(model="gemini-2.0-flash", generation_kwargs={"thinking_budget": 1024})
 
@@ -1159,6 +826,71 @@ class TestGoogleGenAIChatGenerator:
         assert "thinking_budget" in error_message or "thinking features" in error_message
         assert "Try removing" in error_message or "use a different model" in error_message
 
+    def test_live_run_with_structured_output_pydantic(self):
+        """Test that response_format with a Pydantic model returns valid structured JSON output."""
+
+        class City(BaseModel):
+            name: str
+            country: str
+            population: int
+
+        component = GoogleGenAIChatGenerator(generation_kwargs={"response_format": City})
+        results = component.run([ChatMessage.from_user("Tell me about Paris. Respond in JSON.")])
+
+        assert len(results["replies"]) == 1
+        message = results["replies"][0]
+        assert message.text
+
+        parsed = json.loads(message.text)
+        assert "name" in parsed
+        assert "country" in parsed
+        assert "population" in parsed
+
+    def test_live_run_with_structured_output_dict_schema(self):
+        """Test that response_format with a JSON schema dict returns valid structured JSON output."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "country": {"type": "string"},
+            },
+            "required": ["name", "country"],
+        }
+
+        component = GoogleGenAIChatGenerator(generation_kwargs={"response_format": schema})
+        results = component.run([ChatMessage.from_user("Tell me about Paris. Respond in JSON.")])
+
+        assert len(results["replies"]) == 1
+        message = results["replies"][0]
+        assert message.text
+
+        parsed = json.loads(message.text)
+        assert "name" in parsed
+        assert "country" in parsed
+
+    def test_live_run_agent_with_images_in_tool_result(self, test_files_path):
+        def retrieve_image():
+            return [
+                TextContent("Here is the retrieved image."),
+                ImageContent.from_file_path(test_files_path / "apple.jpg", size=(100, 100)),
+            ]
+
+        image_retriever_tool = create_tool_from_function(
+            name="retrieve_image", description="Tool to retrieve an image", function=retrieve_image
+        )
+        image_retriever_tool.outputs_to_string = {"raw_result": True}
+
+        agent = Agent(
+            chat_generator=GoogleGenAIChatGenerator(model="gemini-3-flash-preview"),
+            system_prompt="You are an Agent that can retrieve images and describe them.",
+            tools=[image_retriever_tool],
+        )
+
+        user_message = ChatMessage.from_user("Retrieve the image and describe it in max 5 words.")
+        result = agent.run(messages=[user_message])
+
+        assert "apple" in result["last_message"].text.lower()
+
 
 @pytest.mark.skipif(
     not os.environ.get("GOOGLE_API_KEY", None),
@@ -1166,7 +898,7 @@ class TestGoogleGenAIChatGenerator:
 )
 @pytest.mark.integration
 @pytest.mark.asyncio
-class TestAsyncGoogleGenAIChatGenerator:
+class TestAsyncGoogleGenAIChatGeneratorInference:
     """Test class for async functionality of GoogleGenAIChatGenerator."""
 
     async def test_live_run_async(self) -> None:
@@ -1177,7 +909,7 @@ class TestAsyncGoogleGenAIChatGenerator:
         assert len(results["replies"]) == 1
         message: ChatMessage = results["replies"][0]
         assert message.text and "paris" in message.text.lower(), "Response does not contain Paris"
-        assert "gemini-2.0-flash" in message.meta["model"]
+        assert "gemini-2.5-flash" in message.meta["model"]
         assert message.meta["finish_reason"] == "stop"
 
     async def test_live_run_async_streaming(self):
@@ -1220,14 +952,16 @@ class TestAsyncGoogleGenAIChatGenerator:
         assert len(tool_message.tool_calls) == 1, "Tool message has multiple tool calls"
         assert tool_message.tool_calls[0].tool_name == "weather"
         assert tool_message.tool_calls[0].arguments == {"city": "Paris"}
-        assert tool_message.meta["finish_reason"] == "stop"
+        assert tool_message.meta["finish_reason"] == "tool_calls"
 
     async def test_live_run_async_with_thinking(self):
         """
         Async integration test for the thinking feature.
         """
         chat_messages = [ChatMessage.from_user("Why is the sky blue? Explain in one sentence.")]
-        component = GoogleGenAIChatGenerator(model="gemini-2.5-pro", generation_kwargs={"thinking_budget": -1})
+        component = GoogleGenAIChatGenerator(
+            model="gemini-3-flash-preview", generation_kwargs={"thinking_level": "low"}
+        )
         results = await component.run_async(chat_messages)
 
         assert len(results["replies"]) == 1
@@ -1250,7 +984,7 @@ class TestAsyncGoogleGenAIChatGenerator:
         Async integration test to verify that thinking configuration fails fast with unsupported models.
         This tests the fail-fast principle - no silent fallbacks.
         """
-        # Use a model that does NOT support thinking features
+        # Use a model that does NOT support thinking features (gemini-2.0-flash)
         chat_messages = [ChatMessage.from_user("Why is the sky blue?")]
         component = GoogleGenAIChatGenerator(model="gemini-2.0-flash", generation_kwargs={"thinking_budget": 1024})
 
@@ -1264,6 +998,26 @@ class TestAsyncGoogleGenAIChatGenerator:
         assert "gemini-2.0" in error_message
         assert "thinking_budget" in error_message or "thinking features" in error_message
         assert "Try removing" in error_message or "use a different model" in error_message
+
+    async def test_live_run_async_with_structured_output(self):
+        """Async integration test for structured output with a Pydantic model."""
+
+        class City(BaseModel):
+            name: str
+            country: str
+            population: int
+
+        component = GoogleGenAIChatGenerator(generation_kwargs={"response_format": City})
+        results = await component.run_async([ChatMessage.from_user("Tell me about Paris. Respond in JSON.")])
+
+        assert len(results["replies"]) == 1
+        message = results["replies"][0]
+        assert message.text
+
+        parsed = json.loads(message.text)
+        assert "name" in parsed
+        assert "country" in parsed
+        assert "population" in parsed
 
     async def test_concurrent_async_calls(self):
         """Test multiple concurrent async calls."""
@@ -1286,97 +1040,3 @@ class TestAsyncGoogleGenAIChatGenerator:
             assert result["replies"][0].text
             assert result["replies"][0].meta["model"]
             assert result["replies"][0].meta["finish_reason"] == "stop"
-
-
-def test_aggregate_streaming_chunks_with_reasoning(monkeypatch):
-    """Test the _aggregate_streaming_chunks_with_reasoning method for reasoning content aggregation."""
-    monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
-    component = GoogleGenAIChatGenerator()
-    component_info = ComponentInfo.from_component(component)
-
-    # Create mock streaming chunks with reasoning content
-    chunk1 = Mock()
-    chunk1.content = "Hello"
-    chunk1.tool_calls = []
-    chunk1.meta = {"usage": {"prompt_tokens": 10, "completion_tokens": 5}}
-    chunk1.component_info = component_info
-
-    chunk2 = Mock()
-    chunk2.content = " world"
-    chunk2.tool_calls = []
-    chunk2.meta = {"usage": {"prompt_tokens": 10, "completion_tokens": 8}}
-    chunk2.component_info = component_info
-
-    # Mock the reasoning content that would be extracted
-    mock_reasoning = Mock()
-    mock_reasoning.reasoning_text = "I should greet the user politely"
-    mock_reasoning.reasoning_type = "REASONING_TYPE_UNSPECIFIED"
-
-    # Mock the final chunk with reasoning
-    final_chunk = Mock()
-    final_chunk.content = ""
-    final_chunk.tool_calls = []
-    final_chunk.meta = {
-        "usage": {"prompt_tokens": 10, "completion_tokens": 13, "thoughts_token_count": 5},
-        "model": "gemini-2.5-pro",
-    }
-    final_chunk.component_info = component_info
-
-    # Add reasoning deltas to the final chunk meta (this is how the real method works)
-    final_chunk.meta["reasoning_deltas"] = [{"type": "reasoning", "content": "I should greet the user politely"}]
-
-    # Test aggregation
-    result = component._aggregate_streaming_chunks_with_reasoning([chunk1, chunk2, final_chunk])
-
-    # Verify the aggregated message
-    assert result.text == "Hello world"
-    assert result.tool_calls == []
-    assert result.reasoning is not None
-    assert result.reasoning.reasoning_text == "I should greet the user politely"
-    assert result.meta["usage"]["prompt_tokens"] == 10
-    assert result.meta["usage"]["completion_tokens"] == 13
-    assert result.meta["usage"]["thoughts_token_count"] == 5
-    assert result.meta["model"] == "gemini-2.5-pro"
-
-
-def test_process_thinking_config(monkeypatch):
-    """Test the _process_thinking_config method with different thinking_budget values."""
-    monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key")
-    component = GoogleGenAIChatGenerator()
-
-    # Test valid thinking_budget values
-    generation_kwargs = {"thinking_budget": 1024, "temperature": 0.7}
-    result = component._process_thinking_config(generation_kwargs.copy())
-
-    # thinking_budget should be moved to thinking_config
-    assert "thinking_budget" not in result
-    assert "thinking_config" in result
-    assert result["thinking_config"].thinking_budget == 1024
-    # Other kwargs should be preserved
-    assert result["temperature"] == 0.7
-
-    # Test dynamic allocation (-1)
-    generation_kwargs = {"thinking_budget": -1}
-    result = component._process_thinking_config(generation_kwargs.copy())
-    assert result["thinking_config"].thinking_budget == -1
-
-    # Test zero (disable thinking)
-    generation_kwargs = {"thinking_budget": 0}
-    result = component._process_thinking_config(generation_kwargs.copy())
-    assert result["thinking_config"].thinking_budget == 0
-
-    # Test large value
-    generation_kwargs = {"thinking_budget": 24576}
-    result = component._process_thinking_config(generation_kwargs.copy())
-    assert result["thinking_config"].thinking_budget == 24576
-
-    # Test when thinking_budget is not present
-    generation_kwargs = {"temperature": 0.5}
-    result = component._process_thinking_config(generation_kwargs.copy())
-    assert result == generation_kwargs  # No changes
-
-    # Test invalid type (should fall back to dynamic)
-    generation_kwargs = {"thinking_budget": "invalid", "temperature": 0.5}
-    result = component._process_thinking_config(generation_kwargs.copy())
-    assert result["thinking_config"].thinking_budget == -1  # Dynamic allocation
-    assert result["temperature"] == 0.5

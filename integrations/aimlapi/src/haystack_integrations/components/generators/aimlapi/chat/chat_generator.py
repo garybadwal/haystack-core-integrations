@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from haystack import component, default_to_dict, logging
 from haystack.components.generators.chat import OpenAIChatGenerator
@@ -20,6 +20,7 @@ AIMLAPI_HEADERS = {"HTTP-Referer": "https://github.com/deepset-ai/haystack-core-
 class AIMLAPIChatGenerator(OpenAIChatGenerator):
     """
     Enables text generation using AIMLAPI generative models.
+
     For supported models, see AIMLAPI documentation.
 
     Users can pass any text generation parameters valid for the AIMLAPI chat completion API
@@ -63,18 +64,19 @@ class AIMLAPIChatGenerator(OpenAIChatGenerator):
         *,
         api_key: Secret = Secret.from_env_var("AIMLAPI_API_KEY"),
         model: str = "openai/gpt-5-chat-latest",
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        api_base_url: Optional[str] = "https://api.aimlapi.com/v1",
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
-        timeout: Optional[float] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        max_retries: Optional[int] = None,
-        http_client_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+        streaming_callback: StreamingCallbackT | None = None,
+        api_base_url: str | None = "https://api.aimlapi.com/v1",
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
+        timeout: float | None = None,
+        extra_headers: dict[str, Any] | None = None,
+        max_retries: int | None = None,
+        http_client_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """
-        Creates an instance of AIMLAPIChatGenerator. Unless specified otherwise,
-        the default model is `openai/gpt-5-chat-latest`.
+        Creates an instance of AIMLAPIChatGenerator.
+
+        Unless specified otherwise, the default model is `openai/gpt-5-chat-latest`.
 
         :param api_key:
             The AIMLAPI API key.
@@ -128,7 +130,7 @@ class AIMLAPIChatGenerator(OpenAIChatGenerator):
         )
         self.extra_headers = extra_headers
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize this component to a dictionary.
 
@@ -154,18 +156,18 @@ class AIMLAPIChatGenerator(OpenAIChatGenerator):
     def _prepare_api_call(
         self,
         *,
-        messages: List[ChatMessage],
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
-        tools_strict: Optional[bool] = None,
-    ) -> Dict[str, Any]:
+        messages: list[ChatMessage],
+        streaming_callback: StreamingCallbackT | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
+        tools_strict: bool | None = None,
+    ) -> dict[str, Any]:
         # update generation kwargs by merging with the generation kwargs passed to the run method
         generation_kwargs = {**self.generation_kwargs, **(generation_kwargs or {})}
         extra_headers = {**AIMLAPI_HEADERS, **(self.extra_headers or {})}
 
         # adapt ChatMessage(s) to the format expected by the OpenAI API (AIMLAPI uses the same format)
-        aimlapi_formatted_messages: List[Dict[str, Any]] = [message.to_openai_dict_format() for message in messages]
+        aimlapi_formatted_messages: list[dict[str, Any]] = [message.to_openai_dict_format() for message in messages]
 
         tools_strict = tools_strict if tools_strict is not None else self.tools_strict
         flattened_tools = flatten_tools_or_toolsets(tools or self.tools)
@@ -190,8 +192,6 @@ class AIMLAPIChatGenerator(OpenAIChatGenerator):
         if is_streaming and num_responses > 1:
             msg = "Cannot stream multiple responses, please set n=1."
             raise ValueError(msg)
-        response_format = generation_kwargs.pop("response_format", None)
-
         response_format = generation_kwargs.pop("response_format", None)
 
         base_args = {

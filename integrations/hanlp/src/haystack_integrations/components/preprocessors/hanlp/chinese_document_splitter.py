@@ -2,8 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+from dataclasses import replace
+from typing import Any, Literal
 
 from haystack import Document, component, logging
 from haystack.core.serialization import default_from_dict, default_to_dict
@@ -11,6 +13,7 @@ from haystack.utils import deserialize_callable, serialize_callable
 from more_itertools import windowed
 
 import hanlp
+from hanlp.common.component import Component as HanlpComponent
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +49,6 @@ class ChineseDocumentSplitter:
     splitter = ChineseDocumentSplitter(
         split_by="word", split_length=10, split_overlap=3, respect_sentence_boundary=True
     )
-    splitter.warm_up()
     result = splitter.run(documents=[doc])
     print(result["documents"])
     ```
@@ -59,9 +61,9 @@ class ChineseDocumentSplitter:
         split_overlap: int = 200,
         split_threshold: int = 0,
         respect_sentence_boundary: bool = False,
-        splitting_function: Optional[Callable] = None,
+        splitting_function: Callable | None = None,
         granularity: Literal["coarse", "fine"] = "coarse",
-    ):
+    ) -> None:
         """
         Initialize the ChineseDocumentSplitter component.
 
@@ -94,6 +96,9 @@ class ChineseDocumentSplitter:
         self.respect_sentence_boundary = respect_sentence_boundary
         self.splitting_function = splitting_function
         self.granularity = granularity
+        self.chinese_tokenizer: HanlpComponent | None = None
+        self.split_sent: HanlpComponent | None = None
+        self._is_warmed_up = False
 
     @staticmethod
     def _validate_init_parameters(
@@ -149,7 +154,7 @@ class ChineseDocumentSplitter:
             raise ValueError(msg)
 
     @component.output_types(documents=list[Document])
-    def run(self, documents: List[Document]) -> Dict[str, List[Document]]:
+    def run(self, documents: list[Document]) -> dict[str, list[Document]]:
         """
         Split documents into smaller chunks.
 
@@ -158,9 +163,8 @@ class ChineseDocumentSplitter:
 
         :raises RuntimeError: If the Chinese word segmentation model is not loaded.
         """
-        if self.split_sent is None:
-            msg = "The Chinese word segmentation model is not loaded. Please run 'warm_up()' before calling 'run()'."
-            raise RuntimeError(msg)
+        if not self._is_warmed_up:
+            self.warm_up()
 
         split_docs = []
         for doc in documents:
@@ -169,13 +173,17 @@ class ChineseDocumentSplitter:
 
     def warm_up(self) -> None:
         """Warm up the component by loading the necessary models."""
+        if self._is_warmed_up:
+            return
+
         if self.granularity == "coarse":
             self.chinese_tokenizer = hanlp.load(hanlp.pretrained.tok.COARSE_ELECTRA_SMALL_ZH)
         if self.granularity == "fine":
             self.chinese_tokenizer = hanlp.load(hanlp.pretrained.tok.FINE_ELECTRA_SMALL_ZH)
         self.split_sent = hanlp.load(hanlp.pretrained.eos.UD_CTB_EOS_MUL)
+        self._is_warmed_up = True
 
-    def _split_by_character(self, doc: Document) -> List[Document]:
+    def _split_by_character(self, doc: Document) -> list[Document]:
         """
         Define a function to handle Chinese clauses
 
@@ -187,7 +195,7 @@ class ChineseDocumentSplitter:
 
         split_at = _CHARACTER_SPLIT_BY_MAPPING[self.split_by]
 
-        units = self.chinese_tokenizer(doc.content)
+        units = self.chinese_tokenizer(doc.content)  # type: ignore[misc]
 
         for i in range(len(units) - 1):
             units[i] += split_at
@@ -202,7 +210,7 @@ class ChineseDocumentSplitter:
         )
 
     # Define a function to handle Chinese clauses
-    def chinese_sentence_split(self, text: str) -> List[Dict[str, Any]]:
+    def chinese_sentence_split(self, text: str) -> list[dict[str, Any]]:
         """
         Split Chinese text into sentences.
 
@@ -210,7 +218,7 @@ class ChineseDocumentSplitter:
         :return: A list of split sentences.
         """
         # Split sentences
-        sentences = self.split_sent(text)
+        sentences = self.split_sent(text)  # type: ignore[misc]
 
         # Organize the format of segmented sentences
         results = []
@@ -223,7 +231,7 @@ class ChineseDocumentSplitter:
 
         return results
 
-    def _split_document(self, doc: Document) -> List[Document]:
+    def _split_document(self, doc: Document) -> list[Document]:
         if self.split_by == "sentence" or self.respect_sentence_boundary:
             return self._split_by_hanlp_sentence(doc)
 
@@ -233,8 +241,8 @@ class ChineseDocumentSplitter:
         return self._split_by_character(doc)
 
     def _concatenate_sentences_based_on_word_amount(
-        self, sentences: List[str], split_length: int, split_overlap: int, granularity: str
-    ) -> Tuple[List[str], List[int], List[int]]:
+        self, sentences: list[str], split_length: int, split_overlap: int, granularity: str
+    ) -> tuple[list[str], list[int], list[int]]:
         """
         Groups the sentences into chunks of `split_length` words while respecting sentence boundaries.
 
@@ -251,18 +259,24 @@ class ChineseDocumentSplitter:
         chunk_word_count = 0
         chunk_starting_page_number = 1
         chunk_start_idx = 0
-        current_chunk: List[str] = []
+        current_chunk: list[str] = []
 
         # output lists
         split_start_page_numbers = []
-        list_of_splits: List[List[str]] = []
+        list_of_splits: list[list[str]] = []
         split_start_indices = []
 
         for sentence_idx, sentence in enumerate(sentences):
             current_chunk.append(sentence)
-            chunk_word_count += len(self.chinese_tokenizer(sentence))
+            chunk_word_count += len(
+                self.chinese_tokenizer(sentence)  # type: ignore[misc]
+            )
             next_sentence_word_count = (
-                len(self.chinese_tokenizer(sentences[sentence_idx + 1])) if sentence_idx < len(sentences) - 1 else 0
+                len(
+                    self.chinese_tokenizer(sentences[sentence_idx + 1])  # type: ignore[misc]
+                )
+                if sentence_idx < len(sentences) - 1
+                else 0
             )
 
             # Number of words in the current chunk plus the next sentence is larger than the split_length,
@@ -305,7 +319,7 @@ class ChineseDocumentSplitter:
 
         return text_splits, split_start_page_numbers, split_start_indices
 
-    def _split_by_hanlp_sentence(self, doc: Document) -> List[Document]:
+    def _split_by_hanlp_sentence(self, doc: Document) -> list[Document]:
         """
         Split Chinese text into sentences.
 
@@ -342,8 +356,8 @@ class ChineseDocumentSplitter:
         return split_docs
 
     def _concatenate_units(
-        self, elements: List[str], split_length: int, split_overlap: int, split_threshold: int
-    ) -> Tuple[List[str], List[int], List[int]]:
+        self, elements: list[str], split_length: int, split_overlap: int, split_threshold: int
+    ) -> tuple[list[str], list[int], list[int]]:
         """
         Concatenates the elements into parts of split_length units.
 
@@ -364,9 +378,9 @@ class ChineseDocumentSplitter:
         # Otherwise, proceed as before
         step = split_length - split_overlap
         step = max(step, 1)
-        text_splits: List[str] = []
-        splits_pages: List[int] = []
-        splits_start_idxs: List[int] = []
+        text_splits: list[str] = []
+        splits_pages: list[int] = []
+        splits_start_idxs: list[int] = []
         cur_start_idx = 0
         cur_page = 1
         segments = windowed(elements, n=split_length, step=step)
@@ -399,14 +413,14 @@ class ChineseDocumentSplitter:
         return text_splits, splits_pages, splits_start_idxs
 
     def _create_docs_from_splits(
-        self, text_splits: List[str], splits_pages: List[int], splits_start_idxs: List[int], meta: Dict[str, Any]
-    ) -> List[Document]:
+        self, text_splits: list[str], splits_pages: list[int], splits_start_idxs: list[int], meta: dict[str, Any]
+    ) -> list[Document]:
         """
         Creates Document objects from splits enriching them with page number and the metadata of the original document.
         """
-        documents: List[Document] = []
+        documents: list[Document] = []
 
-        for i, (txt, split_idx) in enumerate(zip(text_splits, splits_start_idxs)):
+        for i, (txt, split_idx) in enumerate(zip(text_splits, splits_start_idxs, strict=True)):
             copied_meta = deepcopy(meta)
             copied_meta["page_number"] = splits_pages[i]
             copied_meta["split_id"] = i
@@ -427,10 +441,7 @@ class ChineseDocumentSplitter:
             previous_doc_start_idx = splits_start_idxs[i - 1]
             self._add_split_overlap_information(doc, doc_start_idx, previous_doc, previous_doc_start_idx)
 
-        for d in documents:
-            if d.content is not None:
-                d.content = d.content.replace(" ", "")
-        return documents
+        return [replace(d, content=d.content.replace(" ", "")) if d.content is not None else d for d in documents]
 
     @staticmethod
     def _add_split_overlap_information(
@@ -460,7 +471,7 @@ class ChineseDocumentSplitter:
                 overlapping_range = (0, overlapping_range[1] - overlapping_range[0])
                 previous_doc.meta["_split_overlap"].append({"doc_id": current_doc.id, "range": overlapping_range})
 
-    def _number_of_sentences_to_keep(self, sentences: List[str], split_length: int, split_overlap: int) -> int:
+    def _number_of_sentences_to_keep(self, sentences: list[str], split_length: int, split_overlap: int) -> int:
         """
         Returns the number of sentences to keep in the next chunk based on the `split_overlap` and `split_length`.
 
@@ -477,7 +488,9 @@ class ChineseDocumentSplitter:
         num_words = 0
 
         for sent in reversed(sentences[1:]):
-            num_words += len(self.chinese_tokenizer(sent))
+            num_words += len(
+                self.chinese_tokenizer(sent)  # type: ignore[misc]
+            )
             # If the number of words is larger than the split_length then don't add any more sentences
             if num_words > split_length:
                 break
@@ -486,7 +499,7 @@ class ChineseDocumentSplitter:
                 break
         return num_sentences_to_keep
 
-    def _split_by_function(self, doc: Document) -> List[Document]:
+    def _split_by_function(self, doc: Document) -> list[Document]:
         """
         Split a document using a custom splitting function.
 
@@ -515,7 +528,7 @@ class ChineseDocumentSplitter:
             meta=metadata,
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
         """
@@ -533,7 +546,7 @@ class ChineseDocumentSplitter:
         return serialized
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ChineseDocumentSplitter":
+    def from_dict(cls, data: dict[str, Any]) -> "ChineseDocumentSplitter":
         """
         Deserializes the component from a dictionary.
         """

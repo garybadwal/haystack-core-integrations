@@ -2,27 +2,40 @@ name: Core / Project release on PyPi
 
 # The pushed tag must be formatted like so:
 # * integrations/<INTEGRATION_FOLDER_NAME>-v1.0.0
+# * integrations/<INTEGRATION_FOLDER_NAME>-v1.0.0.post0 (for post-releases)
 #
 # For example, if we want to release version 1.0.99
 # of the google-vertex-haystack integration we'd have to push the tag:
 #
 # integrations/google_vertex-v1.0.99
+#
+# For a final post-release (e.g., for archiving):
+#
+# integrations/google_vertex-v1.0.99.post0
 
 on:
   push:
     tags:
-      - "**-v[0-9].[0-9]+.[0-9]+"
+      - "**-v[0-9]+.[0-9]+.[0-9]+*"
 
 jobs:
   release-on-pypi:
     runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           token: ${{ secrets.HAYSTACK_BOT_TOKEN }}
           fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
 
       - name: Install dependencies
         run: pip install hatch requests
@@ -44,14 +57,12 @@ jobs:
         run: hatch build
 
       - name: Publish on PyPi
-        working-directory: ${{ steps.pathfinder.outputs.project_path }}
-        env:
-          HATCH_INDEX_USER: __token__
-          HATCH_INDEX_AUTH: ${{ secrets.PYPI_API_TOKEN }}
-        run: hatch publish -y
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          packages-dir: ${{ steps.pathfinder.outputs.project_path }}/dist
 
       - name: Generate changelog
-        uses: orhun/git-cliff-action@v4
+        uses: orhun/git-cliff-action@c93ef52f3d0ddcdcc9bd5447d98d458a11cd4f72 # v4.7.1
         env:
           OUTPUT: "${{ steps.pathfinder.outputs.project_path }}/CHANGELOG.md"
         with:
@@ -60,22 +71,14 @@ jobs:
             --include-path "${{ steps.pathfinder.outputs.project_path }}/**/*"
             --tag-pattern "${{ steps.pathfinder.outputs.project_path }}-v*"
 
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v7
+      - name: Commit changelog
+        uses: EndBug/add-and-commit@290ea2c423ad77ca9c62ae0f5b224379612c0321 # v10.0.0
         with:
-          token: ${{ secrets.HAYSTACK_BOT_TOKEN }}
-          commit-message: "Update changelog for ${{ steps.pathfinder.outputs.project_path }}"
-          branch: update-changelog-${{ steps.pathfinder.outputs.project_path }}
-          base: main
-          title: "docs: update changelog for ${{ steps.pathfinder.outputs.project_path }}"
-          add-paths: |
-            ${{ steps.pathfinder.outputs.project_path }}/CHANGELOG.md
-          body: |
-            This PR updates the changelog for ${{ steps.pathfinder.outputs.project_path }} integration
-            with the latest changes just released on PyPi. Please review the changelog diff below and adjust it
-            if necessary.
-
-            A good changelog diff simply lists these latest changes on top of the CHANGELOG.md file.
-            If there are some diffs that seem out of place, please adjust the CHANGELOG.md file manually.
-            Either way, please merge this PR as soon as possible.
+          author_name: "HaystackBot"
+          author_email: "accounts@deepset.ai"
+          message: "Update the changelog"
+          add: ${{ steps.pathfinder.outputs.project_path }}
+          # to avoid that the pushed branch tip is behind its remote counterpart, we need to pull first
+          pull: "origin main --rebase --autostash"
+          push: origin HEAD:main
 

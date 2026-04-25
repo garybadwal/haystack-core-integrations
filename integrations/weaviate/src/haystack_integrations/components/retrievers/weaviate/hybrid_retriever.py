@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from haystack import Document, component, default_from_dict, default_to_dict
 from haystack.document_stores.types import FilterPolicy
@@ -21,12 +21,12 @@ class WeaviateHybridRetriever:
         self,
         *,
         document_store: WeaviateDocumentStore,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: dict[str, Any] | None = None,
         top_k: int = 10,
-        alpha: Optional[float] = None,
-        max_vector_distance: Optional[float] = None,
-        filter_policy: Union[str, FilterPolicy] = FilterPolicy.REPLACE,
-    ):
+        alpha: float = 0.7,
+        max_vector_distance: float | None = None,
+        filter_policy: str | FilterPolicy = FilterPolicy.REPLACE,
+    ) -> None:
         """
         Creates a new instance of WeaviateHybridRetriever.
 
@@ -37,34 +37,38 @@ class WeaviateHybridRetriever:
         :param top_k:
             Maximum number of documents to return.
         :param alpha:
-            Blending factor for hybrid retrieval in Weaviate. Must be in the range ``[0.0, 1.0]``.
+            Blending factor for hybrid retrieval in Weaviate. Must be in the range `[0.0, 1.0]`.
 
-            Weaviate hybrid search combines keyword (BM25) and vector scores into a single ranking. ``alpha`` controls
+            Weaviate hybrid search combines keyword (BM25) and vector scores into a single ranking. `alpha` controls
             how much each part contributes to the final score:
 
-            - ``alpha = 0.0``: only keyword (BM25) scoring is used.
-            - ``alpha = 1.0``: only vector similarity scoring is used.
+            - `alpha = 0.0`: only keyword (BM25) scoring is used.
+            - `alpha = 1.0`: only vector similarity scoring is used.
             - Values in between blend the two; higher values favor the vector score, lower values favor BM25.
 
-            If ``None``, the Weaviate server default is used.
+            By default, 0.7 is used which is the Weaviate server default.
 
             See the official Weaviate docs on Hybrid Search parameters for more details:
-            `Hybrid search parameters <https://weaviate.io/developers/weaviate/search/hybrid#parameters>`_
-            `Hybrid Search <https://docs.weaviate.io/weaviate/concepts/search/hybrid-search>`_
+            - [Hybrid search parameters](https://weaviate.io/developers/weaviate/search/hybrid#parameters)
+            - [Hybrid Search](https://docs.weaviate.io/weaviate/concepts/search/hybrid-search)
         :param max_vector_distance:
             Optional threshold that restricts the vector part of the hybrid search to candidates within a maximum
             vector distance. Candidates with a distance larger than this threshold are excluded from the vector portion
             before blending.
 
-            Use this to prune low-quality vector matches while still benefitting from keyword recall. Leave ``None`` to
+            Use this to prune low-quality vector matches while still benefitting from keyword recall. Leave `None` to
             use Weaviate's default behavior without an explicit cutoff.
 
             See the official Weaviate docs on Hybrid Search parameters for more details:
-            - `Hybrid search parameters <https://weaviate.io/developers/weaviate/search/hybrid#parameters>`_
-            - `Hybrid Search <https://docs.weaviate.io/weaviate/concepts/search/hybrid-search>`_
+            - [Hybrid search parameters](https://weaviate.io/developers/weaviate/search/hybrid#parameters)
+            - [Hybrid Search](https://docs.weaviate.io/weaviate/concepts/search/hybrid-search)
         :param filter_policy:
             Policy to determine how filters are applied.
         """
+
+        if not 0.0 <= alpha <= 1.0:
+            msg = f"alpha ({alpha}) must be in the range [0.0, 1.0]"
+            raise ValueError(msg)
 
         self._document_store = document_store
         self._filters = filters or {}
@@ -75,7 +79,7 @@ class WeaviateHybridRetriever:
             filter_policy if isinstance(filter_policy, FilterPolicy) else FilterPolicy.from_str(filter_policy)
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -93,7 +97,7 @@ class WeaviateHybridRetriever:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "WeaviateHybridRetriever":
+    def from_dict(cls, data: dict[str, Any]) -> "WeaviateHybridRetriever":
         """
         Deserializes the component from a dictionary.
 
@@ -111,16 +115,16 @@ class WeaviateHybridRetriever:
 
         return default_from_dict(cls, data)
 
-    @component.output_types(documents=List[Document])
+    @component.output_types(documents=list[Document])
     def run(
         self,
         query: str,
-        query_embedding: List[float],
-        filters: Optional[Dict[str, Any]] = None,
-        top_k: Optional[int] = None,
-        alpha: Optional[float] = None,
-        max_vector_distance: Optional[float] = None,
-    ) -> Dict[str, List[Document]]:
+        query_embedding: list[float],
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
+        alpha: float | None = None,
+        max_vector_distance: float | None = None,
+    ) -> dict[str, list[Document]]:
         """
         Retrieves documents from Weaviate using hybrid search.
 
@@ -134,38 +138,114 @@ class WeaviateHybridRetriever:
         :param top_k:
             The maximum number of documents to return.
         :param alpha:
-            Blending factor for hybrid retrieval in Weaviate. Must be in the range ``[0.0, 1.0]``.
+            Blending factor for hybrid retrieval in Weaviate. Must be in the range `[0.0, 1.0]`.
 
-            Weaviate hybrid search combines keyword (BM25) and vector scores into a single ranking. ``alpha`` controls
+            Weaviate hybrid search combines keyword (BM25) and vector scores into a single ranking. `alpha` controls
             how much each part contributes to the final score:
 
-            - ``alpha = 0.0``: only keyword (BM25) scoring is used.
-            - ``alpha = 1.0``: only vector similarity scoring is used.
+            - `alpha = 0.0`: only keyword (BM25) scoring is used.
+            - `alpha = 1.0`: only vector similarity scoring is used.
             - Values in between blend the two; higher values favor the vector score, lower values favor BM25.
 
-            If ``None``, the Weaviate server default is used.
+            If `None`, the Weaviate server default is used.
 
             See the official Weaviate docs on Hybrid Search parameters for more details:
-            `Hybrid search parameters <https://weaviate.io/developers/weaviate/search/hybrid#parameters>`_
-            `Hybrid Search <https://docs.weaviate.io/weaviate/concepts/search/hybrid-search>`_
+            - [Hybrid search parameters](https://weaviate.io/developers/weaviate/search/hybrid#parameters)
+            - [Hybrid Search](https://docs.weaviate.io/weaviate/concepts/search/hybrid-search)
         :param max_vector_distance:
             Optional threshold that restricts the vector part of the hybrid search to candidates within a maximum
             vector distance. Candidates with a distance larger than this threshold are excluded from the vector portion
             before blending.
 
-            Use this to prune low-quality vector matches while still benefitting from keyword recall. Leave ``None`` to
+            Use this to prune low-quality vector matches while still benefitting from keyword recall. Leave `None` to
             use Weaviate's default behavior without an explicit cutoff.
 
             See the official Weaviate docs on Hybrid Search parameters for more details:
-            - `Hybrid search parameters <https://weaviate.io/developers/weaviate/search/hybrid#parameters>`_
-            - `Hybrid Search <https://docs.weaviate.io/weaviate/concepts/search/hybrid-search>`_
+            - [Hybrid search parameters](https://weaviate.io/developers/weaviate/search/hybrid#parameters)
+            - [Hybrid Search](https://docs.weaviate.io/weaviate/concepts/search/hybrid-search)
+        :returns: A dictionary with the following keys:
+            - `documents`: List of documents returned by the search engine.
         """
         filters = apply_filter_policy(self._filter_policy, self._filters, filters)
         top_k = self._top_k if top_k is None else top_k
         alpha = self._alpha if alpha is None else alpha
         max_vector_distance = self._max_vector_distance if max_vector_distance is None else max_vector_distance
 
+        if alpha is not None and not 0.0 <= alpha <= 1.0:
+            msg = f"alpha ({alpha}) must be in the range [0.0, 1.0]"
+            raise ValueError(msg)
+
         documents = self._document_store._hybrid_retrieval(
+            query=query,
+            query_embedding=query_embedding,
+            filters=filters,
+            top_k=top_k,
+            alpha=alpha,
+            max_vector_distance=max_vector_distance,
+        )
+        return {"documents": documents}
+
+    @component.output_types(documents=list[Document])
+    async def run_async(
+        self,
+        query: str,
+        query_embedding: list[float],
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
+        alpha: float | None = None,
+        max_vector_distance: float | None = None,
+    ) -> dict[str, list[Document]]:
+        """
+        Asynchronously retrieves documents from Weaviate using hybrid search.
+
+        :param query:
+            The query text.
+        :param query_embedding:
+            Embedding of the query.
+        :param filters: Filters applied to the retrieved Documents. The way runtime filters are applied depends on
+                        the `filter_policy` chosen at retriever initialization. See init method docstring for more
+                        details.
+        :param top_k:
+            The maximum number of documents to return.
+        :param alpha:
+            Blending factor for hybrid retrieval in Weaviate. Must be in the range `[0.0, 1.0]`.
+
+            Weaviate hybrid search combines keyword (BM25) and vector scores into a single ranking. `alpha` controls
+            how much each part contributes to the final score:
+
+            - `alpha = 0.0`: only keyword (BM25) scoring is used.
+            - `alpha = 1.0`: only vector similarity scoring is used.
+            - Values in between blend the two; higher values favor the vector score, lower values favor BM25.
+
+            If `None`, the Weaviate server default is used.
+
+            See the official Weaviate docs on Hybrid Search parameters for more details:
+            - [Hybrid search parameters](https://weaviate.io/developers/weaviate/search/hybrid#parameters)
+            - [Hybrid Search](https://docs.weaviate.io/weaviate/concepts/search/hybrid-search)
+        :param max_vector_distance:
+            Optional threshold that restricts the vector part of the hybrid search to candidates within a maximum
+            vector distance. Candidates with a distance larger than this threshold are excluded from the vector portion
+            before blending.
+
+            Use this to prune low-quality vector matches while still benefitting from keyword recall. Leave `None` to
+            use Weaviate's default behavior without an explicit cutoff.
+
+            See the official Weaviate docs on Hybrid Search parameters for more details:
+            - [Hybrid search parameters](https://weaviate.io/developers/weaviate/search/hybrid#parameters)
+            - [Hybrid Search](https://docs.weaviate.io/weaviate/concepts/search/hybrid-search)
+        :returns: A dictionary with the following keys:
+            - `documents`: List of documents returned by the search engine.
+        """
+        filters = apply_filter_policy(self._filter_policy, self._filters, filters)
+        top_k = self._top_k if top_k is None else top_k
+        alpha = self._alpha if alpha is None else alpha
+        max_vector_distance = self._max_vector_distance if max_vector_distance is None else max_vector_distance
+
+        if alpha is not None and not 0.0 <= alpha <= 1.0:
+            msg = f"alpha ({alpha}) must be in the range [0.0, 1.0]"
+            raise ValueError(msg)
+
+        documents = await self._document_store._hybrid_retrieval_async(
             query=query,
             query_embedding=query_embedding,
             filters=filters,

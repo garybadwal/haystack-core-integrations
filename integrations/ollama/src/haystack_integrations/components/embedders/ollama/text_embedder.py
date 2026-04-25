@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from haystack import component
 
@@ -8,8 +8,9 @@ from ollama import AsyncClient, Client
 @component
 class OllamaTextEmbedder:
     """
-    Computes the embeddings of a list of Documents and stores the obtained vectors in the embedding field of
-    each Document. It uses embedding models compatible with the Ollama Library.
+    Computes the embeddings of a list of Documents and stores the obtained vectors in each Document's embedding field.
+
+    It uses embedding models compatible with the Ollama Library.
 
     Usage example:
     ```python
@@ -25,11 +26,13 @@ class OllamaTextEmbedder:
         self,
         model: str = "nomic-embed-text",
         url: str = "http://localhost:11434",
-        generation_kwargs: Optional[Dict[str, Any]] = None,
+        generation_kwargs: dict[str, Any] | None = None,
         timeout: int = 120,
-        keep_alive: Optional[Union[float, str]] = None,
-    ):
+        keep_alive: float | str | None = None,
+    ) -> None:
         """
+        Create a new OllamaTextEmbedder instance.
+
         :param model:
             The name of the model to use. The model should be available in the running Ollama instance.
         :param url:
@@ -58,10 +61,10 @@ class OllamaTextEmbedder:
         self._client = Client(host=self.url, timeout=self.timeout)
         self._async_client = AsyncClient(host=self.url, timeout=self.timeout)
 
-    @component.output_types(embedding=List[float], meta=Dict[str, Any])
+    @component.output_types(embedding=list[float], meta=dict[str, Any])
     def run(
-        self, text: str, generation_kwargs: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Union[List[float], Dict[str, Any]]]:
+        self, text: str, generation_kwargs: dict[str, Any] | None = None
+    ) -> dict[str, list[float] | dict[str, Any]]:
         """
         Runs an Ollama Model to compute embeddings of the provided text.
 
@@ -85,10 +88,10 @@ class OllamaTextEmbedder:
 
         return result
 
-    @component.output_types(embedding=List[float], meta=Dict[str, Any])
+    @component.output_types(embedding=list[float], meta=dict[str, Any])
     async def run_async(
-        self, text: str, generation_kwargs: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Union[List[float], Dict[str, Any]]]:
+        self, text: str, generation_kwargs: dict[str, Any] | None = None
+    ) -> dict[str, list[float] | dict[str, Any]]:
         """
         Asynchronously run an Ollama Model to compute embeddings of the provided text.
 

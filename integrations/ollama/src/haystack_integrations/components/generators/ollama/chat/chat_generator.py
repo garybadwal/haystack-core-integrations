@@ -1,5 +1,7 @@
 import json
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Literal, Optional, Union
+from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import replace
+from typing import Any, Literal
 
 from haystack import component, default_from_dict, default_to_dict
 from haystack.dataclasses import (
@@ -10,6 +12,7 @@ from haystack.dataclasses import (
     ToolCall,
     select_streaming_callback,
 )
+from haystack.dataclasses.chat_message import ReasoningContent
 from haystack.dataclasses.streaming_chunk import ComponentInfo, FinishReason, StreamingChunk, ToolCallDelta
 from haystack.tools import (
     ToolsType,
@@ -20,17 +23,46 @@ from haystack.tools import (
 )
 from haystack.utils.callable_serialization import deserialize_callable, serialize_callable
 from pydantic.json_schema import JsonSchemaValue
+from tenacity import RetryCallState, retry, retry_if_exception, wait_exponential
 
-from ollama import AsyncClient, ChatResponse, Client
+from ollama import AsyncClient, ChatResponse, Client, ResponseError
 
-FINISH_REASON_MAPPING: Dict[str, FinishReason] = {
+FINISH_REASON_MAPPING: dict[str, FinishReason] = {
     "stop": "stop",
     "tool_calls": "tool_calls",
     # we skip load and unload reasons
 }
 
+HTTP_STATUS_TOO_MANY_REQUESTS = 429
+HTTP_STATUS_SERVER_ERROR_MIN = 500
+HTTP_STATUS_SERVER_ERROR_MAX_EXCLUSIVE = 600
 
-def _convert_chatmessage_to_ollama_format(message: ChatMessage) -> Dict[str, Any]:
+
+def _stop_after_instance_max_retries(retry_state: RetryCallState) -> bool:
+    """
+    Stop retries after `self.max_retries + 1` attempts.
+    """
+    instance = retry_state.args[0]
+    return retry_state.attempt_number >= instance.max_retries + 1
+
+
+def _is_retryable_exception(exc: BaseException) -> bool:
+    """
+    Return True for transient failures that should be retried.
+
+    Retries are attempted for:
+    - HTTP 429 responses
+    - HTTP 5xx responses
+    - transport-level connection/timeout errors
+    """
+    if isinstance(exc, ResponseError):
+        return exc.status_code == HTTP_STATUS_TOO_MANY_REQUESTS or (
+            HTTP_STATUS_SERVER_ERROR_MIN <= exc.status_code < HTTP_STATUS_SERVER_ERROR_MAX_EXCLUSIVE
+        )
+    return isinstance(exc, (ConnectionError, TimeoutError))
+
+
+def _convert_chatmessage_to_ollama_format(message: ChatMessage) -> dict[str, Any]:
     """
     Convert a ChatMessage to the format expected by the Ollama Chat API.
     """
@@ -48,7 +80,7 @@ def _convert_chatmessage_to_ollama_format(message: ChatMessage) -> Dict[str, Any
         msg = "For Ollama compatibility, a `ChatMessage` can contain at most one `TextContent` or `ToolCallResult`."
         raise ValueError(msg)
 
-    ollama_msg: Dict[str, Any] = {"role": message.role.value}
+    ollama_msg: dict[str, Any] = {"role": message.role.value}
 
     if tool_call_results:
         # Ollama does not provide a way to communicate errors in tool invocations, so we ignore the error field
@@ -70,9 +102,10 @@ def _convert_chatmessage_to_ollama_format(message: ChatMessage) -> Dict[str, Any
     return ollama_msg
 
 
-def _convert_ollama_meta_to_openai_format(input_response_dict: Dict) -> Dict[str, Any]:
+def _convert_ollama_meta_to_openai_format(input_response_dict: dict) -> dict[str, Any]:
     """
     Map Ollama metadata keys onto the OpenAI-compatible names Haystack expects.
+
     All fields that are not part of the OpenAI metadata are left unchanged in the returned dict.
 
     Example Ollama metadata:
@@ -129,7 +162,7 @@ def _convert_ollama_response_to_chatmessage(ollama_response: ChatResponse) -> Ch
     response_dict = ollama_response.model_dump()
     ollama_message = response_dict["message"]
     text = ollama_message["content"]
-    tool_calls: List[ToolCall] = []
+    tool_calls: list[ToolCall] = []
 
     if ollama_tool_calls := ollama_message.get("tool_calls"):
         for ollama_tc in ollama_tool_calls:
@@ -142,9 +175,12 @@ def _convert_ollama_response_to_chatmessage(ollama_response: ChatResponse) -> Ch
 
     reasoning = ollama_message.get("thinking", None)
 
-    chat_msg = ChatMessage.from_assistant(text=text or None, tool_calls=tool_calls, reasoning=reasoning)
-
-    chat_msg._meta = _convert_ollama_meta_to_openai_format(response_dict)
+    chat_msg = ChatMessage.from_assistant(
+        text=text or None,
+        tool_calls=tool_calls,
+        reasoning=reasoning,
+        meta=_convert_ollama_meta_to_openai_format(response_dict),
+    )
 
     return chat_msg
 
@@ -164,8 +200,8 @@ def _build_chunk(
     meta = {key: value for key, value in chunk_response_dict.items() if key != "message"}
     meta["role"] = chunk_response_dict["message"]["role"]
 
-    # until a specific field in StreamingChunk is available, we store the thinking in the meta
-    meta["reasoning"] = chunk_response_dict["message"].get("thinking", None)
+    thinking = chunk_response_dict["message"].get("thinking", None)
+    reasoning = ReasoningContent(reasoning_text=thinking) if thinking else None
 
     if tool_calls := chunk_response_dict["message"].get("tool_calls"):
         for tool_call in tool_calls:
@@ -186,6 +222,7 @@ def _build_chunk(
         finish_reason=finish_reason,
         component_info=component_info,
         tool_calls=tool_calls_list,
+        reasoning=reasoning,
     )
 
 
@@ -211,15 +248,18 @@ class OllamaChatGenerator:
         self,
         model: str = "qwen3:0.6b",
         url: str = "http://localhost:11434",
-        generation_kwargs: Optional[Dict[str, Any]] = None,
+        generation_kwargs: dict[str, Any] | None = None,
         timeout: int = 120,
-        keep_alive: Optional[Union[float, str]] = None,
-        streaming_callback: Optional[Callable[[StreamingChunk], None]] = None,
-        tools: Optional[ToolsType] = None,
-        response_format: Optional[Union[None, Literal["json"], JsonSchemaValue]] = None,
-        think: Union[bool, Literal["low", "medium", "high"]] = False,
-    ):
+        max_retries: int = 0,
+        keep_alive: float | str | None = None,
+        streaming_callback: Callable[[StreamingChunk], None] | None = None,
+        tools: ToolsType | None = None,
+        response_format: None | Literal["json"] | JsonSchemaValue | None = None,
+        think: bool | Literal["low", "medium", "high"] = False,
+    ) -> None:
         """
+        Create a new OllamaChatGenerator instance.
+
         :param model:
             The name of the model to use. The model must already be present (pulled) in the running Ollama instance.
         :param url:
@@ -230,7 +270,10 @@ class OllamaChatGenerator:
             [Ollama docs](https://github.com/jmorganca/ollama/blob/main/docs/modelfile.md#valid-parameters-and-values).
         :param timeout:
             The number of seconds before throwing a timeout error from the Ollama API.
-        :param think
+        :param max_retries:
+            Maximum number of retries to attempt for failed requests (HTTP 429, 5xx, connection/timeout errors).
+            Uses exponential backoff between attempts. Set to 0 (default) to disable retries.
+        :param think:
             If True, the model will "think" before producing a response.
             Only [thinking models](https://ollama.com/search?c=thinking) support this feature.
             Some models like gpt-oss support different levels of thinking: "low", "medium", "high".
@@ -265,6 +308,7 @@ class OllamaChatGenerator:
         self.url = url
         self.generation_kwargs = generation_kwargs or {}
         self.timeout = timeout
+        self.max_retries = max_retries
         self.keep_alive = keep_alive
         self.streaming_callback = streaming_callback
         self.tools = tools  # Store original tools for serialization
@@ -274,7 +318,7 @@ class OllamaChatGenerator:
         self._client = Client(host=self.url, timeout=self.timeout)
         self._async_client = AsyncClient(host=self.url, timeout=self.timeout)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -289,6 +333,7 @@ class OllamaChatGenerator:
             url=self.url,
             generation_kwargs=self.generation_kwargs,
             timeout=self.timeout,
+            max_retries=self.max_retries,
             keep_alive=self.keep_alive,
             streaming_callback=callback_name,
             tools=serialize_tools_or_toolset(self.tools),
@@ -296,7 +341,7 @@ class OllamaChatGenerator:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OllamaChatGenerator":
+    def from_dict(cls, data: dict[str, Any]) -> "OllamaChatGenerator":
         """
         Deserializes the component from a dictionary.
 
@@ -314,22 +359,26 @@ class OllamaChatGenerator:
     def _handle_streaming_response(
         self,
         response_iter: Iterator[ChatResponse],
-        callback: Optional[SyncStreamingCallbackT],
-    ) -> Dict[str, List[ChatMessage]]:
+        callback: SyncStreamingCallbackT | None,
+    ) -> dict[str, list[ChatMessage]]:
         """
-        Merge an Ollama streaming response into a single ChatMessage, preserving
-        tool calls.  Works even when arguments arrive piecemeal as str fragments
-        or as full JSON dicts.
+        Merge an Ollama streaming response into a single ChatMessage, preserving tool calls.
+
+        Works even when arguments arrive piecemeal as str fragments or as full JSON dicts.
         """
 
         component_info = ComponentInfo.from_component(self)
-        chunks: List[StreamingChunk] = []
+        chunks: list[StreamingChunk] = []
 
         # Accumulators
-        arg_by_id: Dict[str, str] = {}
-        name_by_id: Dict[str, str] = {}
-        id_order: List[str] = []
+        arg_by_id: dict[str, str] = {}
+        name_by_id: dict[str, str] = {}
+        id_order: list[str] = []
         tool_call_index: int = 0
+
+        # track reasoning and content blocks to correctly set start=True on the first chunk of each block
+        reasoning_started = False
+        content_started = False
 
         # Stream
         for index, raw in enumerate(response_iter):
@@ -338,10 +387,16 @@ class OllamaChatGenerator:
             chunk = _build_chunk(
                 chunk_response=raw, component_info=component_info, index=index, tool_call_index=tool_call_index
             )
-            chunks.append(chunk)
 
-            start = index == 0 or bool(chunk.tool_calls)
-            chunk.start = start
+            if chunk.reasoning:
+                start = not reasoning_started or bool(chunk.tool_calls)
+                reasoning_started = True
+            else:
+                start = (not content_started) or bool(chunk.tool_calls)
+                content_started = True
+
+            chunk = replace(chunk, start=start)
+            chunks.append(chunk)
 
             if chunk.tool_calls:
                 for tool_call in chunk.tool_calls:
@@ -377,7 +432,7 @@ class OllamaChatGenerator:
         reasoning = ""
         for c in chunks:
             text += c.content
-            reasoning += c.meta.get("reasoning", None) or ""
+            reasoning += c.reasoning.reasoning_text if c.reasoning else ""
 
         tool_calls = []
         for tool_call_id in id_order:
@@ -398,20 +453,25 @@ class OllamaChatGenerator:
     async def _handle_streaming_response_async(
         self,
         response_iter: AsyncIterator[ChatResponse],
-        callback: Optional[AsyncStreamingCallbackT],
-    ) -> Dict[str, List[ChatMessage]]:
+        callback: AsyncStreamingCallbackT | None,
+    ) -> dict[str, list[ChatMessage]]:
         """
-        Merge an Ollama async streaming response into a single ChatMessage, preserving
-        tool calls.  Works even when arguments arrive piecemeal as str fragments
-        or as full JSON dicts."""
+        Merge an Ollama async streaming response into a single ChatMessage, preserving tool calls.
+
+        Works even when arguments arrive piecemeal as str fragments or as full JSON dicts.
+        """
         component_info = ComponentInfo.from_component(self)
-        chunks: List[StreamingChunk] = []
+        chunks: list[StreamingChunk] = []
 
         # Accumulators
-        arg_by_id: Dict[str, str] = {}
-        name_by_id: Dict[str, str] = {}
-        id_order: List[str] = []
+        arg_by_id: dict[str, str] = {}
+        name_by_id: dict[str, str] = {}
+        id_order: list[str] = []
         tool_call_index: int = 0
+
+        # track reasoning and content blocks to correctly set start=True on the first chunk of each block
+        reasoning_started = False
+        content_started = False
 
         # Stream
         index = 0
@@ -421,10 +481,16 @@ class OllamaChatGenerator:
             chunk = _build_chunk(
                 chunk_response=raw, component_info=component_info, index=index, tool_call_index=tool_call_index
             )
-            chunks.append(chunk)
 
-            start = index == 0 or bool(chunk.tool_calls)
-            chunk.start = start
+            if chunk.reasoning:
+                start = not reasoning_started or bool(chunk.tool_calls)
+                reasoning_started = True
+            else:
+                start = (not content_started) or bool(chunk.tool_calls)
+                content_started = True
+
+            chunk = replace(chunk, start=start)
+            chunks.append(chunk)
 
             if chunk.tool_calls:
                 for tool_call in chunk.tool_calls:
@@ -448,7 +514,7 @@ class OllamaChatGenerator:
         reasoning = ""
         for c in chunks:
             text += c.content
-            reasoning += c.meta.get("reasoning", None) or ""
+            reasoning += c.reasoning.reasoning_text if c.reasoning else ""
 
         tool_calls = []
         for tool_call_id in id_order:
@@ -466,15 +532,65 @@ class OllamaChatGenerator:
 
         return {"replies": [reply]}
 
-    @component.output_types(replies=List[ChatMessage])
+    @retry(
+        reraise=True,
+        stop=_stop_after_instance_max_retries,
+        retry=retry_if_exception(_is_retryable_exception),
+        wait=wait_exponential(),
+    )
+    def _chat(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        is_stream: bool,
+        generation_kwargs: dict[str, Any],
+    ) -> ChatResponse | Iterator[ChatResponse]:
+        return self._client.chat(
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            stream=is_stream,  # type: ignore[call-overload]  # Ollama expects Literal[True] or Literal[False], not bool
+            keep_alive=self.keep_alive,
+            options=generation_kwargs,
+            format=self.response_format,
+            think=self.think,
+        )
+
+    @retry(
+        reraise=True,
+        stop=_stop_after_instance_max_retries,
+        retry=retry_if_exception(_is_retryable_exception),
+        wait=wait_exponential(),
+    )
+    async def _chat_async(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        is_stream: bool,
+        generation_kwargs: dict[str, Any],
+    ) -> ChatResponse | AsyncIterator[ChatResponse]:
+        return await self._async_client.chat(
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            stream=is_stream,  # type: ignore[call-overload]  # Ollama expects Literal[True] or Literal[False], not bool
+            keep_alive=self.keep_alive,
+            options=generation_kwargs,
+            format=self.response_format,
+            think=self.think,
+        )
+
+    @component.output_types(replies=list[ChatMessage])
     def run(
         self,
-        messages: List[ChatMessage],
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
+        messages: list[ChatMessage],
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
         *,
-        streaming_callback: Optional[StreamingCallbackT] = None,
-    ) -> Dict[str, List[ChatMessage]]:
+        streaming_callback: StreamingCallbackT | None = None,
+    ) -> dict[str, list[ChatMessage]]:
         """
         Runs an Ollama Model on a given chat history.
 
@@ -515,15 +631,8 @@ class OllamaChatGenerator:
 
         ollama_messages = [_convert_chatmessage_to_ollama_format(m) for m in messages]
 
-        response = self._client.chat(
-            model=self.model,
-            messages=ollama_messages,
-            tools=ollama_tools,
-            stream=is_stream,  # type: ignore[call-overload]  # Ollama expects Literal[True] or Literal[False], not bool
-            keep_alive=self.keep_alive,
-            options=generation_kwargs,
-            format=self.response_format,
-            think=self.think,
+        response = self._chat(
+            messages=ollama_messages, tools=ollama_tools, is_stream=is_stream, generation_kwargs=generation_kwargs
         )
 
         if isinstance(response, Iterator):
@@ -532,15 +641,15 @@ class OllamaChatGenerator:
         # non-stream path
         return {"replies": [_convert_ollama_response_to_chatmessage(ollama_response=response)]}
 
-    @component.output_types(replies=List[ChatMessage])
+    @component.output_types(replies=list[ChatMessage])
     async def run_async(
         self,
-        messages: List[ChatMessage],
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
+        messages: list[ChatMessage],
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
         *,
-        streaming_callback: Optional[StreamingCallbackT] = None,
-    ) -> Dict[str, List[ChatMessage]]:
+        streaming_callback: StreamingCallbackT | None = None,
+    ) -> dict[str, list[ChatMessage]]:
         """
         Async version of run. Runs an Ollama Model on a given chat history.
 
@@ -576,15 +685,8 @@ class OllamaChatGenerator:
 
         ollama_messages = [_convert_chatmessage_to_ollama_format(m) for m in messages]
 
-        response = await self._async_client.chat(
-            model=self.model,
-            messages=ollama_messages,
-            tools=ollama_tools,
-            stream=is_stream,  # type: ignore[call-overload]  # Ollama expects Literal[True] or Literal[False], not bool
-            keep_alive=self.keep_alive,
-            options=generation_kwargs,
-            format=self.response_format,
-            think=self.think,
+        response = await self._chat_async(
+            messages=ollama_messages, tools=ollama_tools, is_stream=is_stream, generation_kwargs=generation_kwargs
         )
 
         if isinstance(response, AsyncIterator):

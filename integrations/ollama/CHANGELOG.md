@@ -1,5 +1,67 @@
 # Changelog
 
+## [integrations/ollama-v6.3.0] - 2026-04-10
+
+### 🐛 Bug Fixes
+
+- Replace in-place dataclass mutations with dataclasses.replace() (#3112)
+- Ollama - better reasoning streaming support (#3131)
+
+### 🧪 Testing
+
+- Track test coverage for all integrations (#3065)
+
+### 🧹 Chores
+
+- Add ANN ruff ruleset to llama_cpp, llama_stack, mcp, meta_llama, mistral, mongodb_atlas, nvidia, ollama, openrouter, opensearch (#2991)
+- Enforce ruff docstring rules (D102/D103/D205/D209/D213/D417/D419) in integrations 21-30 (#3010)
+- Increase lower pins for 3.14 support in some integrations + test with 3.14 (#3033)
+
+
+## [integrations/ollama-v6.2.0] - 2026-03-09
+
+### 🚀 Features
+
+- *(ollama)* Add max_retries to chat generator (#2899)
+
+### 🧹 Chores
+
+- Remove unused allow-direct-references (#2866)
+
+
+## [integrations/ollama-v6.1.0] - 2026-02-19
+
+### 🚀 Features
+
+- Use StreamingChunk.reasoning field in Ollama chat generator (#2850)
+
+### 📚 Documentation
+
+- Fix some invalid raises directives (#2847)
+- Simplify pydoc configs (#2855)
+
+
+## [integrations/ollama-v6.0.0] - 2026-01-12
+
+### 🐛 Bug Fixes
+
+- Fix failing tests for opensearch and ollama (#2500)
+- Fix ollama unit test (#2523)
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Ollama - drop Python 3.9 and use X|Y typing (#2719)
+
+### 🌀 Miscellaneous
+
+- Enhancement: Adopt PEP 585 type hinting (part 5) (#2528)
+
 ## [integrations/ollama-v5.3.0] - 2025-10-22
 
 ### 🚀 Features

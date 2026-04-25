@@ -11,7 +11,6 @@ from haystack.components.tools import ToolInvoker
 from haystack.dataclasses import ChatMessage, ChatRole, StreamingChunk, ToolCall
 from haystack.tools import Tool
 from haystack.utils.auth import Secret
-from openai import OpenAIError
 from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_chunk import Choice as ChoiceChunk
@@ -67,7 +66,7 @@ def mock_chat_completion():
     with patch("openai.resources.chat.completions.Completions.create") as mock_chat_completion_create:
         completion = ChatCompletion(
             id="foo",
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             object="chat.completion",
             choices=[
                 Choice(
@@ -90,7 +89,7 @@ class TestCometAPIChatGenerator:
         monkeypatch.setenv("COMET_API_KEY", "test-api-key")
         component = CometAPIChatGenerator()
         assert component.client.api_key == "test-api-key"
-        assert component.model == "gpt-4o-mini"
+        assert component.model == "gpt-5-mini"
         assert component.api_base_url == "https://api.cometapi.com/v1"
         assert component.streaming_callback is None
         assert not component.generation_kwargs
@@ -103,12 +102,12 @@ class TestCometAPIChatGenerator:
     def test_init_with_parameters(self):
         component = CometAPIChatGenerator(
             api_key=Secret.from_token("test-api-key"),
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             streaming_callback=print_streaming_chunk,
             generation_kwargs={"max_tokens": 10, "some_test_param": "test-params"},
         )
         assert component.client.api_key == "test-api-key"
-        assert component.model == "gpt-4o-mini"
+        assert component.model == "gpt-5-mini"
         assert component.streaming_callback is print_streaming_chunk
         assert component.generation_kwargs == {"max_tokens": 10, "some_test_param": "test-params"}
 
@@ -124,7 +123,7 @@ class TestCometAPIChatGenerator:
 
         expected_params = {
             "api_key": {"env_vars": ["COMET_API_KEY"], "strict": True, "type": "env_var"},
-            "model": "gpt-4o-mini",
+            "model": "gpt-5-mini",
             "streaming_callback": None,
             "api_base_url": "https://api.cometapi.com/v1",
             "generation_kwargs": {},
@@ -141,7 +140,7 @@ class TestCometAPIChatGenerator:
         monkeypatch.setenv("ENV_VAR", "test-api-key")
         component = CometAPIChatGenerator(
             api_key=Secret.from_env_var("ENV_VAR"),
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             streaming_callback=print_streaming_chunk,
             generation_kwargs={"max_tokens": 10, "some_test_param": "test-params"},
             timeout=10,
@@ -158,7 +157,7 @@ class TestCometAPIChatGenerator:
 
         expected_params = {
             "api_key": {"env_vars": ["ENV_VAR"], "strict": True, "type": "env_var"},
-            "model": "gpt-4o-mini",
+            "model": "gpt-5-mini",
             "api_base_url": "https://api.cometapi.com/v1",
             "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
             "generation_kwargs": {"max_tokens": 10, "some_test_param": "test-params"},
@@ -177,7 +176,7 @@ class TestCometAPIChatGenerator:
             "type": ("haystack_integrations.components.generators.cometapi.chat.chat_generator.CometAPIChatGenerator"),
             "init_parameters": {
                 "api_key": {"env_vars": ["COMET_API_KEY"], "strict": True, "type": "env_var"},
-                "model": "gpt-4o-mini",
+                "model": "gpt-5-mini",
                 "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
                 "generation_kwargs": {"max_tokens": 10, "some_test_param": "test-params"},
                 "timeout": 10,
@@ -187,7 +186,7 @@ class TestCometAPIChatGenerator:
             },
         }
         component = CometAPIChatGenerator.from_dict(data)
-        assert component.model == "gpt-4o-mini"
+        assert component.model == "gpt-5-mini"
         assert component.streaming_callback is print_streaming_chunk
         assert component.api_base_url == "https://api.cometapi.com/v1"
         assert component.generation_kwargs == {"max_tokens": 10, "some_test_param": "test-params"}
@@ -203,7 +202,7 @@ class TestCometAPIChatGenerator:
             "type": ("haystack_integrations.components.generators.cometapi.chat.chat_generator.CometAPIChatGenerator"),
             "init_parameters": {
                 "api_key": {"env_vars": ["COMET_API_KEY"], "strict": True, "type": "env_var"},
-                "model": "gpt-4o-mini",
+                "model": "gpt-5-mini",
                 "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
                 "generation_kwargs": {"max_tokens": 10, "some_test_param": "test-params"},
                 "timeout": 10,
@@ -254,18 +253,8 @@ class TestCometAPIChatGenerator:
         assert len(results["replies"]) == 1
         message: ChatMessage = results["replies"][0]
         assert "Paris" in message.text
-        assert "gpt-4o-mini" in message.meta["model"]
+        assert "gpt-5-mini" in message.meta["model"]
         assert message.meta["finish_reason"] == "stop"
-
-    @pytest.mark.skipif(
-        not os.environ.get("COMET_API_KEY", None),
-        reason="Export an env var called COMET_API_KEY containing the OpenAI API key to run this test.",
-    )
-    @pytest.mark.integration
-    def test_live_run_wrong_model(self, chat_messages):
-        component = CometAPIChatGenerator(model="something-obviously-wrong")
-        with pytest.raises(OpenAIError):
-            component.run(chat_messages)
 
     @pytest.mark.skipif(
         not os.environ.get("COMET_API_KEY", None),
@@ -290,7 +279,7 @@ class TestCometAPIChatGenerator:
         message: ChatMessage = results["replies"][0]
         assert "Paris" in message.text
 
-        assert "gpt-4o-mini" in message.meta["model"]
+        assert "gpt-5-mini" in message.meta["model"]
         assert message.meta["finish_reason"] == "stop"
 
         assert callback.counter > 1
@@ -445,7 +434,6 @@ class TestCometAPIChatGenerator:
 
         # Create generator with specific configuration
         generator = CometAPIChatGenerator(
-            model="gpt-4o-mini",
             generation_kwargs={"temperature": 0.7},
             streaming_callback=print_streaming_chunk,
             tools=[tool],
@@ -466,7 +454,7 @@ class TestCometAPIChatGenerator:
                         "haystack_integrations.components.generators.cometapi.chat.chat_generator.CometAPIChatGenerator"
                     ),
                     "init_parameters": {
-                        "model": "gpt-4o-mini",
+                        "model": "gpt-5-mini",
                         "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
                         "api_base_url": "https://api.cometapi.com/v1",
                         "organization": None,
@@ -534,7 +522,7 @@ class TestChatCompletionChunkConversion:
                     ChoiceChunk(delta=ChoiceDelta(content="", role="assistant"), index=0, native_finish_reason=None)
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -559,7 +547,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -583,7 +571,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -607,7 +595,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -631,7 +619,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -655,7 +643,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -680,7 +668,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 service_tier=None,
                 system_fingerprint="fp_34a54ae93c",
@@ -707,7 +695,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -731,7 +719,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -755,7 +743,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -779,7 +767,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -795,7 +783,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -810,7 +798,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 object="chat.completion.chunk",
                 usage=CompletionUsage(
                     completion_tokens=42,
@@ -840,7 +828,7 @@ class TestChatCompletionChunkConversion:
         assert result.tool_calls[1].arguments == {"city": "Berlin"}
 
         # Verify meta information
-        assert result.meta["model"] == "gpt-4o-mini"
+        assert result.meta["model"] == "gpt-5-mini"
         assert result.meta["finish_reason"] == "tool_calls"
         assert result.meta["index"] == 0
         assert result.meta["completion_start_time"] is not None

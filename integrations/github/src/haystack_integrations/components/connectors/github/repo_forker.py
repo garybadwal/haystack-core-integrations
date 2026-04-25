@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
 from haystack import component, default_from_dict, default_to_dict, logging
@@ -48,7 +48,7 @@ class GitHubRepoForker:
         poll_interval: int = 2,
         auto_sync: bool = True,
         create_branch: bool = True,
-    ):
+    ) -> None:
         """
         Initialize the component.
 
@@ -137,7 +137,7 @@ class GitHubRepoForker:
         response.raise_for_status()
         return response.json()["login"]
 
-    def _get_existing_repository(self, repo_name: str) -> Optional[str]:
+    def _get_existing_repository(self, repo_name: str) -> str | None:
         """
         Check if a repository with the given name already exists in the authenticated user's account.
 
@@ -221,7 +221,7 @@ class GitHubRepoForker:
         fork_data = response.json()
         return f"{fork_data['owner']['login']}/{fork_data['name']}"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize the component to a dictionary.
 
@@ -239,7 +239,7 @@ class GitHubRepoForker:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "GitHubRepoForker":
+    def from_dict(cls, data: dict[str, Any]) -> "GitHubRepoForker":
         """
         Deserialize the component from a dictionary.
 

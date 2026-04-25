@@ -15,14 +15,21 @@ COHERE_API_URL = "https://api.cohere.com"
 
 
 class TestCohereGenerator:
+    def test_supported_models(self) -> None:
+        """SUPPORTED_MODELS is a non-empty list of strings."""
+        models = CohereGenerator.SUPPORTED_MODELS
+        assert isinstance(models, list)
+        assert len(models) > 0
+        assert all(isinstance(m, str) for m in models)
+
     def test_init_default(self, monkeypatch):
         monkeypatch.setenv("COHERE_API_KEY", "foo")
         component = CohereGenerator()
         assert component.api_key == Secret.from_env_var(["COHERE_API_KEY", "CO_API_KEY"])
-        assert component.model == "command-r-08-2024"
+        assert component.model == "command-a-03-2025"
         assert component.streaming_callback is None
         assert component.api_base_url == COHERE_API_URL
-        assert component.model_parameters == {}
+        assert component.generation_kwargs == {}
 
     def test_init_with_parameters(self):
         callback = lambda x: x  # noqa: E731
@@ -38,7 +45,7 @@ class TestCohereGenerator:
         assert component.model == "command-light"
         assert component.streaming_callback == callback
         assert component.api_base_url == "test-base-url"
-        assert component.model_parameters == {"max_tokens": 10, "some_test_param": "test-params"}
+        assert component.generation_kwargs == {"max_tokens": 10, "some_test_param": "test-params"}
 
     def test_to_dict_default(self, monkeypatch):
         monkeypatch.setenv("COHERE_API_KEY", "test-api-key")
@@ -47,12 +54,14 @@ class TestCohereGenerator:
         assert data == {
             "type": "haystack_integrations.components.generators.cohere.generator.CohereGenerator",
             "init_parameters": {
-                "model": "command-r-08-2024",
+                "model": "command-a-03-2025",
                 "api_key": {"env_vars": ["COHERE_API_KEY", "CO_API_KEY"], "strict": True, "type": "env_var"},
                 "streaming_callback": None,
                 "api_base_url": COHERE_API_URL,
                 "generation_kwargs": {},
                 "tools": None,
+                "timeout": None,
+                "max_retries": None,
             },
         }
 
@@ -75,8 +84,10 @@ class TestCohereGenerator:
                 "api_base_url": "test-base-url",
                 "api_key": {"env_vars": ["ENV_VAR"], "strict": False, "type": "env_var"},
                 "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
-                "generation_kwargs": {},
+                "generation_kwargs": {"max_tokens": 10, "some_test_param": "test-params"},
                 "tools": None,
+                "timeout": None,
+                "max_retries": None,
             },
         }
 
@@ -86,21 +97,19 @@ class TestCohereGenerator:
         data = {
             "type": "haystack_integrations.components.generators.cohere.generator.CohereGenerator",
             "init_parameters": {
-                "model": "command-r-08-2024",
-                "max_tokens": 10,
+                "model": "command-a-03-2025",
+                "generation_kwargs": {"max_tokens": 10, "some_test_param": "test-params"},
                 "api_key": {"env_vars": ["ENV_VAR"], "strict": False, "type": "env_var"},
-                "some_test_param": "test-params",
                 "api_base_url": "test-base-url",
                 "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
-                "tools": None,
             },
         }
         component: CohereGenerator = CohereGenerator.from_dict(data)
         assert component.api_key == Secret.from_env_var("ENV_VAR", strict=False)
-        assert component.model == "command-r-08-2024"
+        assert component.model == "command-a-03-2025"
         assert component.streaming_callback == print_streaming_chunk
         assert component.api_base_url == "test-base-url"
-        assert component.model_parameters == {"max_tokens": 10, "some_test_param": "test-params"}
+        assert component.generation_kwargs == {"max_tokens": 10, "some_test_param": "test-params"}
 
     @pytest.mark.skipif(
         not os.environ.get("COHERE_API_KEY", None) and not os.environ.get("CO_API_KEY", None),
@@ -113,7 +122,7 @@ class TestCohereGenerator:
         assert len(results["replies"]) == 1
         assert "Paris" in results["replies"][0]
         assert len(results["meta"]) == 1
-        assert results["meta"][0]["finish_reason"] == "COMPLETE"
+        assert results["meta"][0]["finish_reason"] == "stop"
 
     @pytest.mark.skipif(
         not os.environ.get("COHERE_API_KEY", None) and not os.environ.get("CO_API_KEY", None),

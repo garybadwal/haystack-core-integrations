@@ -1,3 +1,4 @@
+from mcp import types
 from mcp.server.fastmcp import FastMCP
 
 ################################################
@@ -26,6 +27,25 @@ def divide_by_zero(a: int) -> float:
 
 
 ################################################
+# State IO Calculator MCP Server (returns dicts for state propagation)
+################################################
+
+state_calculator_mcp = FastMCP("StateCalculator")
+
+
+@state_calculator_mcp.tool()
+def state_add(a: int, b: int) -> dict:
+    """Add two integers."""
+    return {"result": a + b}
+
+
+@state_calculator_mcp.tool()
+def state_subtract(a: int, b: int) -> dict:
+    """Subtract integer b from integer a."""
+    return {"result": a - b}
+
+
+################################################
 # Echo MCP Server
 ################################################
 
@@ -36,3 +56,16 @@ echo_mcp = FastMCP("Echo")
 def echo(text: str) -> str:
     """Echo the input text."""
     return text
+
+
+################################################
+# Image MCP Server
+################################################
+
+image_mcp = FastMCP("Image")
+
+
+@image_mcp.tool()
+def image_tool() -> list[types.ImageContent]:
+    """Return image content without any text blocks."""
+    return [types.ImageContent(type="image", data="ZmFrZQ==", mimeType="image/png")]

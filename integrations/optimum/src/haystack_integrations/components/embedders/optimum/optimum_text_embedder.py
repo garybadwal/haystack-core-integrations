@@ -1,4 +1,8 @@
-from typing import Any, Dict, List, Optional, Union
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from typing import Any
 
 from haystack import component, default_from_dict, default_to_dict
 from haystack.utils import Secret
@@ -12,9 +16,10 @@ from .quantization import OptimumEmbedderQuantizationConfig
 @component
 class OptimumTextEmbedder:
     """
-    A component to embed text using models loaded with the
-    [HuggingFace Optimum](https://huggingface.co/docs/optimum/index) library,
-    leveraging the ONNX runtime for high-speed inference.
+    A component to embed text using models loaded with the HuggingFace Optimum library.
+
+    Uses the [HuggingFace Optimum](https://huggingface.co/docs/optimum/index) library and leverages the ONNX
+    runtime for high-speed inference.
 
     Usage example:
     ```python
@@ -23,7 +28,7 @@ class OptimumTextEmbedder:
     text_to_embed = "I love pizza!"
 
     text_embedder = OptimumTextEmbedder(model="sentence-transformers/all-mpnet-base-v2")
-    text_embedder.warm_up()
+    # Components warm up automatically on first run.
 
     print(text_embedder.run(text_to_embed))
 
@@ -34,17 +39,17 @@ class OptimumTextEmbedder:
     def __init__(
         self,
         model: str = "sentence-transformers/all-mpnet-base-v2",
-        token: Optional[Secret] = Secret.from_env_var("HF_API_TOKEN", strict=False),  # noqa: B008
+        token: Secret | None = Secret.from_env_var("HF_API_TOKEN", strict=False),  # noqa: B008
         prefix: str = "",
         suffix: str = "",
         normalize_embeddings: bool = True,
         onnx_execution_provider: str = "CPUExecutionProvider",
-        pooling_mode: Optional[Union[str, OptimumEmbedderPooling]] = None,
-        model_kwargs: Optional[Dict[str, Any]] = None,
-        working_dir: Optional[str] = None,
-        optimizer_settings: Optional[OptimumEmbedderOptimizationConfig] = None,
-        quantizer_settings: Optional[OptimumEmbedderQuantizationConfig] = None,
-    ):
+        pooling_mode: str | OptimumEmbedderPooling | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+        working_dir: str | None = None,
+        optimizer_settings: OptimumEmbedderOptimizationConfig | None = None,
+        quantizer_settings: OptimumEmbedderQuantizationConfig | None = None,
+    ) -> None:
         """
         Create a OptimumTextEmbedder component.
 
@@ -117,7 +122,7 @@ class OptimumTextEmbedder:
         self._backend = _EmbedderBackend(params)
         self._initialized = False
 
-    def warm_up(self):
+    def warm_up(self) -> None:
         """
         Initializes the component.
         """
@@ -127,7 +132,7 @@ class OptimumTextEmbedder:
         self._backend.warm_up()
         self._initialized = True
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -141,7 +146,7 @@ class OptimumTextEmbedder:
         return default_to_dict(self, **init_params)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OptimumTextEmbedder":
+    def from_dict(cls, data: dict[str, Any]) -> "OptimumTextEmbedder":
         """
         Deserializes the component from a dictionary.
 
@@ -153,8 +158,8 @@ class OptimumTextEmbedder:
         _EmbedderParams.deserialize_inplace(data["init_parameters"])
         return default_from_dict(cls, data)
 
-    @component.output_types(embedding=List[float])
-    def run(self, text: str) -> Dict[str, List[float]]:
+    @component.output_types(embedding=list[float])
+    def run(self, text: str) -> dict[str, list[float]]:
         """
         Embed a string.
 
@@ -162,14 +167,11 @@ class OptimumTextEmbedder:
             The text to embed.
         :returns:
             The embeddings of the text.
-        :raises RuntimeError:
-            If the component was not initialized.
         :raises TypeError:
             If the input is not a string.
         """
         if not self._initialized:
-            msg = "The embedding model has not been loaded. Please call warm_up() before running."
-            raise RuntimeError(msg)
+            self.warm_up()
 
         if not isinstance(text, str):
             msg = (

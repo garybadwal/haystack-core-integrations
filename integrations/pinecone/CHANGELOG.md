@@ -1,5 +1,54 @@
 # Changelog
 
+## [integrations/pinecone-v6.1.2] - 2026-01-28
+
+### 🐛 Bug Fixes
+
+- Docs: fixing docstring parsing error for `PineConeDocumentStore` (#2790)
+
+
+## [integrations/pinecone-v6.1.1] - 2026-01-28
+
+### 📚 Documentation
+
+- Fixing docstring parsing error on `PineConeDocumentStore` (#2788)
+
+
+## [integrations/pinecone-v6.1.0] - 2026-01-28
+
+### 🚀 Features
+
+- Add operations to PineConeDocumentStore (#2772)
+
+### 🧪 Testing
+
+- Pinecone - improve flaky tests (#2787)
+
+
+## [integrations/pinecone-v6.0.0] - 2026-01-13
+
+### 🧹 Chores
+
+- [**breaking**] Pinecone - drop Python 3.9 and use X|Y typing (#2723)
+
+
+## [integrations/pinecone-v5.5.0] - 2026-01-08
+
+### 🚀 Features
+
+- Adding `delete_by_filter` and update_by_filter to `PineconeDocumentStore` (#2655)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+- Fix Pinecone types and make sure that tests run (#2658)
+- Make fmt command more forgiving (#2671)
+
+### 🌀 Miscellaneous
+
+- Enhancement: Adopt PEP 585 type hinting (part 5) (#2528)
+- Fix: Fix doc links (#2661)
+
 ## [integrations/pinecone-v5.4.0] - 2025-11-05
 
 ### 🚀 Features

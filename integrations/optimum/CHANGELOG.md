@@ -1,5 +1,35 @@
 # Changelog
 
+## [integrations/optimum-v2.0.0] - 2026-01-13
+
+### 🧹 Chores
+
+- [**breaking**] Optimum - drop Python 3.9 and use X|Y typing (#2721)
+
+
+## [integrations/optimum-v1.3.0] - 2026-01-09
+
+### 🚀 Features
+
+- Update Optimum components to auto call run `warm_up` and don't modify Documents in place (#2675)
+
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+- Make fmt command more forgiving (#2671)
+
+### 🌀 Miscellaneous
+
+- Enhancement: Adopt PEP 585 type hinting (part 5) (#2528)
+
 ## [integrations/optimum-v1.2.2] - 2025-10-17
 
 ### 🧹 Chores

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -263,7 +267,7 @@ class TestFastembedSparseDocumentEmbedderDoc:
             embedding_separator="\n",
         )
         embedder.embedding_backend = MagicMock()
-
+        embedder.embedding_backend.embed.return_value = [self._generate_mocked_sparse_embedding(3) for _ in range(5)]
         documents = [Document(content=f"document-number {i}", meta={"meta_field": f"meta_value {i}"}) for i in range(5)]
 
         embedder.run(documents=documents)
@@ -300,6 +304,19 @@ class TestFastembedSparseDocumentEmbedderDoc:
 
         assert embedder.model_kwargs == bm25_config
 
+    def test_run_calls_warm_up(self):
+        embedder = FastembedSparseDocumentEmbedder()
+
+        mock_backend = MagicMock()
+        mock_backend.embed.return_value = [{"indices": [0], "values": [0.5]}]
+
+        with patch.object(
+            embedder, "warm_up", side_effect=lambda: setattr(embedder, "embedding_backend", mock_backend)
+        ) as mock_warm_up:
+            embedder.run(documents=[Document(content="test document")])
+
+        mock_warm_up.assert_called_once()
+
     @pytest.mark.integration
     def test_run_with_model_kwargs(self):
         """
@@ -313,7 +330,6 @@ class TestFastembedSparseDocumentEmbedderDoc:
             model="Qdrant/bm42-all-minilm-l6-v2-attentions",
             model_kwargs=bm42_config,
         )
-        embedder.warm_up()
 
         doc = Document(content="Example content using BM42")
 
@@ -332,7 +348,6 @@ class TestFastembedSparseDocumentEmbedderDoc:
         embedder = FastembedSparseDocumentEmbedder(
             model="prithivida/Splade_PP_en_v1",
         )
-        embedder.warm_up()
 
         doc = Document(content="Parton energy loss in QCD matter")
 

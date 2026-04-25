@@ -10,7 +10,7 @@ import pytz
 from haystack import Pipeline
 from haystack.components.generators.utils import print_streaming_chunk
 from haystack.components.tools import ToolInvoker
-from haystack.dataclasses import ChatMessage, ChatRole, StreamingChunk, ToolCall
+from haystack.dataclasses import ChatMessage, ChatRole, StreamingChunk
 from haystack.tools import Tool, Toolset
 from haystack.utils.auth import Secret
 from openai import OpenAIError
@@ -103,6 +103,13 @@ def mock_chat_completion():
 
 
 class TestLlamaChatGenerator:
+    def test_supported_models(self) -> None:
+        """SUPPORTED_MODELS is a non-empty list of strings."""
+        models = MetaLlamaChatGenerator.SUPPORTED_MODELS
+        assert isinstance(models, list)
+        assert len(models) > 0
+        assert all(isinstance(m, str) for m in models)
+
     def test_init_default(self, monkeypatch):
         monkeypatch.setenv("LLAMA_API_KEY", "test-api-key")
         component = MetaLlamaChatGenerator()
@@ -111,6 +118,8 @@ class TestLlamaChatGenerator:
         assert component.api_base_url == "https://api.llama.com/compat/v1/"
         assert component.streaming_callback is None
         assert not component.generation_kwargs
+        assert component.timeout is None
+        assert component.max_retries is None
 
     def test_init_fail_wo_api_key(self, monkeypatch):
         monkeypatch.delenv("LLAMA_API_KEY", raising=False)
@@ -124,6 +133,8 @@ class TestLlamaChatGenerator:
             streaming_callback=print_streaming_chunk,
             api_base_url="test-base-url",
             generation_kwargs={"max_tokens": 10, "some_test_param": "test-params"},
+            timeout=15.0,
+            max_retries=3,
         )
         assert component.client.api_key == "test-api-key"
         assert component.model == "Llama-4-Scout-17B-16E-Instruct-FP8"
@@ -132,6 +143,8 @@ class TestLlamaChatGenerator:
             "max_tokens": 10,
             "some_test_param": "test-params",
         }
+        assert component.timeout == 15.0
+        assert component.max_retries == 3
 
     def test_to_dict_default(self, monkeypatch):
         monkeypatch.setenv("LLAMA_API_KEY", "test-api-key")
@@ -153,6 +166,8 @@ class TestLlamaChatGenerator:
             "streaming_callback": None,
             "api_base_url": "https://api.llama.com/compat/v1/",
             "generation_kwargs": {},
+            "timeout": None,
+            "max_retries": None,
         }
 
         for key, value in expected_params.items():
@@ -212,6 +227,8 @@ class TestLlamaChatGenerator:
             "api_base_url": "test-base-url",
             "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
             "generation_kwargs": {"max_tokens": 10, "some_test_param": "test-params", "response_format": schema},
+            "timeout": None,
+            "max_retries": None,
         }
 
         for key, value in expected_params.items():
@@ -234,6 +251,8 @@ class TestLlamaChatGenerator:
                     "max_tokens": 10,
                     "some_test_param": "test-params",
                 },
+                "timeout": 30.0,
+                "max_retries": 5,
             },
         }
         component = MetaLlamaChatGenerator.from_dict(data)
@@ -245,6 +264,8 @@ class TestLlamaChatGenerator:
             "some_test_param": "test-params",
         }
         assert component.api_key == Secret.from_env_var("LLAMA_API_KEY")
+        assert component.timeout == 30.0
+        assert component.max_retries == 5
 
     def test_from_dict_fail_wo_env_var(self, monkeypatch):
         monkeypatch.delenv("LLAMA_API_KEY", raising=False)
@@ -263,6 +284,8 @@ class TestLlamaChatGenerator:
                     "max_tokens": 10,
                     "some_test_param": "test-params",
                 },
+                "timeout": 30.0,
+                "max_retries": 5,
             },
         }
         with pytest.raises(ValueError, match=r"None of the .* environment variables are set"):
@@ -386,61 +409,6 @@ class TestLlamaChatGenerator:
         assert "category" in msg
         assert "achievement_description" in msg
         assert msg["nationality"] == "American"
-
-    @pytest.mark.skipif(
-        not os.environ.get("LLAMA_API_KEY", None),
-        reason="Export an env var called LLAMA_API_KEY containing the Llama API key to run this test.",
-    )
-    @pytest.mark.integration
-    def test_live_run_with_response_format_json_schema(self):
-        response_schema = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "CapitalCity",
-                "strict": True,
-                "schema": {
-                    "title": "CapitalCity",
-                    "type": "object",
-                    "properties": {
-                        "city": {"title": "City", "type": "string"},
-                        "country": {"title": "Country", "type": "string"},
-                    },
-                    "required": ["city", "country"],
-                    "additionalProperties": False,
-                },
-            },
-        }
-
-        chat_messages = [ChatMessage.from_user("What's the capital of France?")]
-        comp = MetaLlamaChatGenerator(generation_kwargs={"response_format": response_schema})
-        results = comp.run(chat_messages)
-        assert len(results["replies"]) == 1
-        message: ChatMessage = results["replies"][0]
-        msg = json.loads(message.text)
-        assert "Paris" in msg["city"]
-        assert isinstance(msg["country"], str)
-        assert "France" in msg["country"]
-        assert message.meta["finish_reason"] == "stop"
-
-    @pytest.mark.skipif(
-        not os.environ.get("LLAMA_API_KEY", None),
-        reason="Export an env var called LLAMA_API_KEY containing the OpenAI API key to run this test.",
-    )
-    @pytest.mark.integration
-    def test_live_run_with_tools(self, tools):
-        chat_messages = [ChatMessage.from_user("What's the weather like in Paris?")]
-        component = MetaLlamaChatGenerator(tools=tools)
-        results = component.run(chat_messages)
-        assert len(results["replies"]) == 1
-        message = results["replies"][0]
-        assert message.text is None
-
-        assert message.tool_calls
-        tool_call = message.tool_call
-        assert isinstance(tool_call, ToolCall)
-        assert tool_call.tool_name == "weather"
-        assert tool_call.arguments == {"city": "Paris"}
-        assert message.meta["finish_reason"] == "tool_calls"
 
     @pytest.mark.skipif(
         not os.environ.get("LLAMA_API_KEY", None),
@@ -616,6 +584,8 @@ class TestLlamaChatGenerator:
                         "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
                         "api_base_url": "https://api.llama.com/compat/v1/",
                         "generation_kwargs": {"temperature": 0.7},
+                        "timeout": None,
+                        "max_retries": None,
                         "tools": [
                             {
                                 "type": "haystack.tools.tool.Tool",

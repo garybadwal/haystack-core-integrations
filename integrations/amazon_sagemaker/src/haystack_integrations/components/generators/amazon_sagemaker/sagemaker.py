@@ -1,5 +1,5 @@
 import json
-from typing import Any, ClassVar, Dict, List, Optional, Union
+from typing import Any, ClassVar
 
 import boto3
 import requests
@@ -49,16 +49,16 @@ class SagemakerGenerator:
     def __init__(
         self,
         model: str,
-        aws_access_key_id: Optional[Secret] = Secret.from_env_var(["AWS_ACCESS_KEY_ID"], strict=False),  # noqa: B008
-        aws_secret_access_key: Optional[Secret] = Secret.from_env_var(  # noqa: B008
+        aws_access_key_id: Secret | None = Secret.from_env_var(["AWS_ACCESS_KEY_ID"], strict=False),  # noqa: B008
+        aws_secret_access_key: Secret | None = Secret.from_env_var(  # noqa: B008
             ["AWS_SECRET_ACCESS_KEY"], strict=False
         ),
-        aws_session_token: Optional[Secret] = Secret.from_env_var(["AWS_SESSION_TOKEN"], strict=False),  # noqa: B008
-        aws_region_name: Optional[Secret] = Secret.from_env_var(["AWS_DEFAULT_REGION"], strict=False),  # noqa: B008
-        aws_profile_name: Optional[Secret] = Secret.from_env_var(["AWS_PROFILE"], strict=False),  # noqa: B008
-        aws_custom_attributes: Optional[Dict[str, Any]] = None,
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+        aws_session_token: Secret | None = Secret.from_env_var(["AWS_SESSION_TOKEN"], strict=False),  # noqa: B008
+        aws_region_name: Secret | None = Secret.from_env_var(["AWS_DEFAULT_REGION"], strict=False),  # noqa: B008
+        aws_profile_name: Secret | None = Secret.from_env_var(["AWS_PROFILE"], strict=False),  # noqa: B008
+        aws_custom_attributes: dict[str, Any] | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """
         Instantiates the session with SageMaker.
 
@@ -95,7 +95,7 @@ class SagemakerGenerator:
         self.aws_region_name = aws_region_name
         self.aws_profile_name = aws_profile_name
 
-        def resolve_secret(secret: Optional[Secret]) -> Optional[str]:
+        def resolve_secret(secret: Secret | None) -> str | None:
             return secret.resolve_value() if secret else None
 
         try:
@@ -114,7 +114,7 @@ class SagemakerGenerator:
             )
             raise AWSConfigurationError(msg) from e
 
-    def _get_telemetry_data(self) -> Dict[str, Any]:
+    def _get_telemetry_data(self) -> dict[str, Any]:
         """
         Returns data that is sent to Posthog for usage analytics.
         :returns: A dictionary with the following keys:
@@ -122,7 +122,7 @@ class SagemakerGenerator:
         """
         return {"model": self.model}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -142,7 +142,7 @@ class SagemakerGenerator:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SagemakerGenerator":
+    def from_dict(cls, data: dict[str, Any]) -> "SagemakerGenerator":
         """
         Deserializes the component from a dictionary.
 
@@ -159,11 +159,11 @@ class SagemakerGenerator:
 
     @staticmethod
     def _get_aws_session(
-        aws_access_key_id: Optional[str] = None,
-        aws_secret_access_key: Optional[str] = None,
-        aws_session_token: Optional[str] = None,
-        aws_region_name: Optional[str] = None,
-        aws_profile_name: Optional[str] = None,
+        aws_access_key_id: str | None = None,
+        aws_secret_access_key: str | None = None,
+        aws_session_token: str | None = None,
+        aws_region_name: str | None = None,
+        aws_profile_name: str | None = None,
     ) -> boto3.Session:
         """
         Creates an AWS Session with the given parameters.
@@ -191,10 +191,10 @@ class SagemakerGenerator:
             msg = f"Failed to initialize the session with provided AWS credentials: {e}."
             raise AWSConfigurationError(msg) from e
 
-    @component.output_types(replies=List[str], meta=List[Dict[str, Any]])
+    @component.output_types(replies=list[str], meta=list[dict[str, Any]])
     def run(
-        self, prompt: str, generation_kwargs: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Union[List[str], List[Dict[str, Any]]]]:
+        self, prompt: str, generation_kwargs: dict[str, Any] | None = None
+    ) -> dict[str, list[str] | list[dict[str, Any]]]:
         """
         Invoke the text generation inference based on the provided prompt and generation parameters.
 
@@ -222,10 +222,10 @@ class SagemakerGenerator:
                 CustomAttributes=custom_attributes,
             )
             response_json = response.get("Body").read().decode("utf-8")
-            output: Dict[str, Dict[str, Any]] = json.loads(response_json)
+            output: dict[str, dict[str, Any]] = json.loads(response_json)
 
             # The output might be either a list of dictionaries or a single dictionary
-            list_output: List[Dict[str, Any]]
+            list_output: list[dict[str, Any]]
             if output and isinstance(output, dict):
                 list_output = [output]
             elif isinstance(output, list) and all(isinstance(o, dict) for o in output):

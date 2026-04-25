@@ -1,4 +1,4 @@
-from typing import Any, Optional, Union
+from typing import Any
 
 from haystack import Document, component, default_from_dict, default_to_dict, logging
 from haystack.document_stores.types import FilterPolicy
@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 class AzureAISearchHybridRetriever:
     """
     Retrieves documents from the AzureAISearchDocumentStore using a hybrid (vector + BM25) retrieval.
+
     Must be connected to the AzureAISearchDocumentStore to run.
 
     """
@@ -21,11 +22,11 @@ class AzureAISearchHybridRetriever:
         self,
         *,
         document_store: AzureAISearchDocumentStore,
-        filters: Optional[dict[str, Any]] = None,
+        filters: dict[str, Any] | None = None,
         top_k: int = 10,
-        filter_policy: Union[str, FilterPolicy] = FilterPolicy.REPLACE,
+        filter_policy: str | FilterPolicy = FilterPolicy.REPLACE,
         **kwargs: Any,
-    ):
+    ) -> None:
         """
         Create the AzureAISearchHybridRetriever component.
 
@@ -100,10 +101,11 @@ class AzureAISearchHybridRetriever:
         self,
         query: str,
         query_embedding: list[float],
-        filters: Optional[dict[str, Any]] = None,
-        top_k: Optional[int] = None,
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
     ) -> dict[str, list[Document]]:
-        """Retrieve documents from the AzureAISearchDocumentStore.
+        """
+        Retrieve documents from the AzureAISearchDocumentStore.
 
         :param query: Text of the query.
         :param query_embedding: A list of floats representing the query embedding

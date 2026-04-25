@@ -1,5 +1,34 @@
 # Changelog
 
+## [integrations/togetherai-v3.0.0] - 2026-01-13
+
+### 🚀 Features
+
+- Support structured outputs in `TogetherAIChatGenerator` (#2534)
+
+
+### 🧪 Testing
+
+- Update together ai tests to use more reliable model (#2485)
+- Use openai oss-20b model for togetherai integration test (#2591)
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+- Add pytest reruns to nightly tests for flaky tests (#2486)
+- Add reruns when running nightly tests if tests fail (#2584)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Togetherai - drop Python 3.9 and use X|Y typing (#2731)
+
+### 🌀 Miscellaneous
+
+- Enhancement: Adopt PEP 585 type hinting (part 5) (#2528)
+- Test: TogetherAI improve flaky test (#2632)
+
 ## [integrations/togetherai-v2.0.0] - 2025-10-23
 
 ### 🌀 Miscellaneous

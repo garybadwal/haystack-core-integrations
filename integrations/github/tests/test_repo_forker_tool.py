@@ -70,9 +70,9 @@ class TestGitHubRepoForkerTool:
         tool = GitHubRepoForkerTool(
             github_token=Secret.from_env_var("GITHUB_TOKEN"),
             raise_on_failure=False,
-            outputs_to_string={"source": "docs", "handler": message_handler},
-            inputs_from_state={"repository": "repo"},
-            outputs_to_state={"documents": {"source": "docs", "handler": message_handler}},
+            outputs_to_string={"source": "repo", "handler": message_handler},
+            inputs_from_state={"repository": "url"},
+            outputs_to_state={"documents": {"source": "repo", "handler": message_handler}},
         )
         tool_dict = tool.to_dict()
         assert tool_dict["type"] == "haystack_integrations.tools.github.repo_forker_tool.GitHubRepoForkerTool"
@@ -89,8 +89,8 @@ class TestGitHubRepoForkerTool:
             tool_dict["data"]["outputs_to_string"]["handler"]
             == "haystack_integrations.tools.github.utils.message_handler"
         )
-        assert tool_dict["data"]["inputs_from_state"] == {"repository": "repo"}
-        assert tool_dict["data"]["outputs_to_state"]["documents"]["source"] == "docs"
+        assert tool_dict["data"]["inputs_from_state"] == {"repository": "url"}
+        assert tool_dict["data"]["outputs_to_state"]["documents"]["source"] == "repo"
         assert (
             tool_dict["data"]["outputs_to_state"]["documents"]["handler"]
             == "haystack_integrations.tools.github.utils.message_handler"
@@ -107,10 +107,10 @@ class TestGitHubRepoForkerTool:
                 "github_token": {"env_vars": ["GITHUB_TOKEN"], "strict": True, "type": "env_var"},
                 "raise_on_failure": False,
                 "outputs_to_string": {"handler": "haystack_integrations.tools.github.utils.message_handler"},
-                "inputs_from_state": {"repository": "repo"},
+                "inputs_from_state": {"repository": "url"},
                 "outputs_to_state": {
                     "documents": {
-                        "source": "docs",
+                        "source": "repo",
                         "handler": "haystack_integrations.tools.github.utils.message_handler",
                     }
                 },
@@ -123,6 +123,6 @@ class TestGitHubRepoForkerTool:
         assert tool.github_token == Secret.from_env_var("GITHUB_TOKEN")
         assert tool.raise_on_failure is False
         assert tool.outputs_to_string["handler"] == message_handler
-        assert tool.inputs_from_state == {"repository": "repo"}
-        assert tool.outputs_to_state["documents"]["source"] == "docs"
+        assert tool.inputs_from_state == {"repository": "url"}
+        assert tool.outputs_to_state["documents"]["source"] == "repo"
         assert tool.outputs_to_state["documents"]["handler"] == message_handler

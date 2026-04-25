@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from haystack import Document, component, default_from_dict, default_to_dict
 from haystack.document_stores.types import FilterPolicy
@@ -18,8 +18,12 @@ class WeaviateBM25Retriever:
 
     Example usage:
     ```python
-    from haystack_integrations.document_stores.weaviate.document_store import WeaviateDocumentStore
-    from haystack_integrations.components.retrievers.weaviate.bm25_retriever import WeaviateBM25Retriever
+    from haystack_integrations.document_stores.weaviate.document_store import (
+        WeaviateDocumentStore,
+    )
+    from haystack_integrations.components.retrievers.weaviate.bm25_retriever import (
+        WeaviateBM25Retriever,
+    )
 
     document_store = WeaviateDocumentStore(url="http://localhost:8080")
     retriever = WeaviateBM25Retriever(document_store=document_store)
@@ -31,10 +35,10 @@ class WeaviateBM25Retriever:
         self,
         *,
         document_store: WeaviateDocumentStore,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: dict[str, Any] | None = None,
         top_k: int = 10,
-        filter_policy: Union[str, FilterPolicy] = FilterPolicy.REPLACE,
-    ):
+        filter_policy: str | FilterPolicy = FilterPolicy.REPLACE,
+    ) -> None:
         """
         Create a new instance of WeaviateBM25Retriever.
 
@@ -53,7 +57,7 @@ class WeaviateBM25Retriever:
             filter_policy if isinstance(filter_policy, FilterPolicy) else FilterPolicy.from_str(filter_policy)
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -69,7 +73,7 @@ class WeaviateBM25Retriever:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "WeaviateBM25Retriever":
+    def from_dict(cls, data: dict[str, Any]) -> "WeaviateBM25Retriever":
         """
         Deserializes the component from a dictionary.
 
@@ -88,10 +92,10 @@ class WeaviateBM25Retriever:
 
         return default_from_dict(cls, data)
 
-    @component.output_types(documents=List[Document])
+    @component.output_types(documents=list[Document])
     def run(
-        self, query: str, filters: Optional[Dict[str, Any]] = None, top_k: Optional[int] = None
-    ) -> Dict[str, List[Document]]:
+        self, query: str, filters: dict[str, Any] | None = None, top_k: int | None = None
+    ) -> dict[str, list[Document]]:
         """
         Retrieves documents from Weaviate using the BM25 algorithm.
 
@@ -102,9 +106,34 @@ class WeaviateBM25Retriever:
                         details.
         :param top_k:
             The maximum number of documents to return.
+        :returns: A dictionary with the following keys:
+            - `documents`: List of documents returned by the search engine.
         """
         filters = apply_filter_policy(self._filter_policy, self._filters, filters)
 
         top_k = top_k or self._top_k
         documents = self._document_store._bm25_retrieval(query=query, filters=filters, top_k=top_k)
+        return {"documents": documents}
+
+    @component.output_types(documents=list[Document])
+    async def run_async(
+        self, query: str, filters: dict[str, Any] | None = None, top_k: int | None = None
+    ) -> dict[str, list[Document]]:
+        """
+        Asynchronously retrieves documents from Weaviate using the BM25 algorithm.
+
+        :param query:
+            The query text.
+        :param filters: Filters applied to the retrieved Documents. The way runtime filters are applied depends on
+                        the `filter_policy` chosen at retriever initialization. See init method docstring for more
+                        details.
+        :param top_k:
+            The maximum number of documents to return.
+        :returns: A dictionary with the following keys:
+            - `documents`: List of documents returned by the search engine.
+        """
+        filters = apply_filter_policy(self._filter_policy, self._filters, filters)
+
+        top_k = top_k or self._top_k
+        documents = await self._document_store._bm25_retrieval_async(query=query, filters=filters, top_k=top_k)
         return {"documents": documents}

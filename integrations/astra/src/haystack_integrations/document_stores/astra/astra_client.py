@@ -1,8 +1,14 @@
+# SPDX-FileCopyrightText: 2023-present Anant Corporation <support@anant.us>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import json
-from typing import Any, Optional, Union
+from collections.abc import Generator
+from typing import Any
 from warnings import warn
 
 from astrapy import DataAPIClient as AstraDBClient
+from astrapy.collection import FilterType
 from astrapy.constants import ReturnDocument
 from astrapy.exceptions import CollectionAlreadyExistsException
 from haystack import logging
@@ -18,17 +24,18 @@ CALLER_NAME = "haystack"
 @dataclass
 class Response:
     document_id: str
-    text: Optional[str]
-    values: Optional[list]
-    metadata: Optional[dict]
-    score: Optional[float]
+    text: str | None
+    values: list | None
+    metadata: dict | None
+    score: float | None
 
 
 @dataclass
 class QueryResponse:
     matches: list[Response]
 
-    def get(self, key):
+    def get(self, key: str) -> Any:  # noqa: ANN401
+        """Return the value for the given key."""
         return self.__dict__[key]
 
 
@@ -44,10 +51,11 @@ class AstraClient:
         collection_name: str,
         embedding_dimension: int,
         similarity_function: str,
-        namespace: Optional[str] = None,
-    ):
+        namespace: str | None = None,
+    ) -> None:
         """
         The connection to Astra DB is established and managed through the JSON API.
+
         The required credentials (api endpoint and application token) can be generated
         through the UI by clicking and the connect tab, and then selecting JSON API and
         Generate Configuration.
@@ -145,11 +153,11 @@ class AstraClient:
     def query(
         self,
         *,
-        vector: Optional[list[float]] = None,
-        query_filter: Optional[dict[str, Union[str, float, int, bool, list, dict]]] = None,
-        top_k: Optional[int] = None,
-        include_metadata: Optional[bool] = None,
-        include_values: Optional[bool] = None,
+        vector: list[float] | None = None,
+        query_filter: dict[str, str | float | int | bool | list | dict] | None = None,
+        top_k: int | None = None,
+        include_metadata: bool | None = None,
+        include_values: bool | None = None,
     ) -> QueryResponse:
         """
         Search the Astra index using a query vector.
@@ -172,17 +180,24 @@ class AstraClient:
 
         # include_metadata means return all columns in the table (including text that got embedded)
         # include_values means return the vector of the embedding for the searched items
-        formatted_response = self._format_query_response(responses, include_metadata, include_values)
+        formatted_response = self._format_query_response(
+            responses, include_metadata=include_metadata, include_values=include_values
+        )
 
         return formatted_response
 
-    def _query_without_vector(self, top_k, filters=None):
+    def _query_without_vector(self, top_k: int | None, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         query = {"filter": filters, "limit": top_k}
 
         return self.find_documents(query)
 
     @staticmethod
-    def _format_query_response(responses, include_metadata, include_values):
+    def _format_query_response(
+        responses: list[dict[str, Any]] | None,
+        *,
+        include_metadata: bool | None,
+        include_values: bool | None,
+    ) -> QueryResponse:
         final_res = []
 
         if responses is None:
@@ -202,7 +217,9 @@ class AstraClient:
 
         return QueryResponse(final_res)
 
-    def _query(self, vector, top_k, filters=None):
+    def _query(
+        self, vector: list[float], top_k: int | None, filters: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         query = {"sort": {"$vector": vector}, "limit": top_k, "includeSimilarity": True}
 
         if filters is not None:
@@ -212,11 +229,14 @@ class AstraClient:
 
         return result
 
-    def find_documents(self, find_query):
+    def find_documents(
+        self, find_query: dict[str, Any], projection: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         """
         Find documents in the Astra index.
 
         :param find_query: a dictionary with the query options
+        :param projection: optional projection for the returned documents
         :returns: the documents found in the index
         """
         find_cursor = self._astra_db_collection.find(
@@ -224,7 +244,7 @@ class AstraClient:
             sort=find_query.get("sort"),
             limit=find_query.get("limit"),
             include_similarity=find_query.get("includeSimilarity"),
-            projection={"*": 1},
+            projection=projection or {"*": 1},
         )
 
         find_results = []
@@ -236,7 +256,7 @@ class AstraClient:
 
         return find_results
 
-    def find_one_document(self, find_query):
+    def find_one_document(self, find_query: dict[str, Any]) -> dict[str, Any] | None:
         """
         Find one document in the Astra index.
 
@@ -263,7 +283,7 @@ class AstraClient:
         """
         document_batch = []
 
-        def batch_generator(chunks, batch_size):
+        def batch_generator(chunks: list[str], batch_size: int) -> Generator[list[str], None, None]:
             for i in range(0, len(chunks), batch_size):
                 i_end = min(len(chunks), i + batch_size)
                 batch = chunks[i:i_end]
@@ -319,10 +339,11 @@ class AstraClient:
     def delete(
         self,
         *,
-        ids: Optional[list[str]] = None,
-        filters: Optional[dict[str, Union[str, float, int, bool, list, dict]]] = None,
+        ids: list[str] | None = None,
+        filters: dict[str, str | float | int | bool | list | dict] | None = None,
     ) -> int:
-        """Delete documents from the Astra index.
+        """
+        Delete documents from the Astra index.
 
         :param ids: the ids of the documents to delete
         :param filters: additional filters to apply when deleting documents
@@ -344,15 +365,48 @@ class AstraClient:
     def delete_all_documents(self) -> int:
         """
         Delete all documents from the Astra index.
+
         :returns: the number of documents deleted
         """
         delete_result = self._astra_db_collection.delete_many(filter={})
 
         return delete_result.deleted_count
 
-    def count_documents(self, upper_bound: int = 10000) -> int:
+    def count_documents(self, filters: FilterType | None = None, upper_bound: int = 10000) -> int:
         """
         Count the number of documents in the Astra index.
+
+        :param filters: optional filter to restrict the counted documents
+        :param upper_bound: maximum expected count, required by Astra's API
         :returns: the number of documents in the index
         """
-        return self._astra_db_collection.count_documents({}, upper_bound=upper_bound)
+        return self._astra_db_collection.count_documents(filters or {}, upper_bound=upper_bound)
+
+    def distinct(self, key: str, filters: FilterType | None = None) -> list[Any]:
+        """
+        Return the distinct values for a field in the Astra index.
+
+        :param key: field name
+        :param filters: optional filter to restrict the matching documents
+        :returns: distinct values for the field
+        """
+        return self._astra_db_collection.distinct(key, filter=filters)
+
+    def update(
+        self,
+        *,
+        filters: dict[str, str | float | int | bool | list | dict],
+        update: dict[str, Any],
+    ) -> int:
+        """
+        Update multiple documents in the Astra index that match the filter.
+
+        :param filters: the filter to match documents to update
+        :param update: the update operations to apply (e.g., {"$set": {...}})
+
+        :returns:
+            The number of documents updated
+        """
+        update_result = self._astra_db_collection.update_many(filter=filters, update=update, upsert=False)
+
+        return update_result.update_info["nModified"]

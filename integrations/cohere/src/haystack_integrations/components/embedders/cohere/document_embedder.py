@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Dict, List, Optional, Union
+from dataclasses import replace
+from typing import Any, ClassVar
 
 from haystack import Document, component, default_from_dict, default_to_dict
 from haystack.utils import Secret, deserialize_secrets_inplace
@@ -35,31 +36,38 @@ class CohereDocumentEmbedder:
     ```
     """
 
+    SUPPORTED_MODELS: ClassVar[list[str]] = [
+        "embed-v4.0",
+        "embed-english-v3.0",
+        "embed-english-light-v3.0",
+        "embed-multilingual-v3.0",
+        "embed-multilingual-light-v3.0",
+    ]
+    """A non-exhaustive list of embed models supported by this component.
+    See https://docs.cohere.com/docs/models#embed for the full list."""
+
     def __init__(
         self,
         api_key: Secret = Secret.from_env_var(["COHERE_API_KEY", "CO_API_KEY"]),
-        model: str = "embed-english-v2.0",
+        model: str = "embed-v4.0",
         input_type: str = "search_document",
         api_base_url: str = "https://api.cohere.com",
         truncate: str = "END",
         timeout: float = 120.0,
         batch_size: int = 32,
         progress_bar: bool = True,
-        meta_fields_to_embed: Optional[List[str]] = None,
+        meta_fields_to_embed: list[str] | None = None,
         embedding_separator: str = "\n",
-        embedding_type: Optional[EmbeddingTypes] = None,
-    ):
+        embedding_type: EmbeddingTypes | None = None,
+    ) -> None:
         """
+        Initialize the CohereDocumentEmbedder.
+
         :param api_key: the Cohere API key.
-        :param model: the name of the model to use. Supported Models are:
-            `"embed-english-v3.0"`, `"embed-english-light-v3.0"`, `"embed-multilingual-v3.0"`,
-            `"embed-multilingual-light-v3.0"`, `"embed-english-v2.0"`, `"embed-english-light-v2.0"`,
-            `"embed-multilingual-v2.0"`. This list of all supported models can be found in the
-            [model documentation](https://docs.cohere.com/docs/models#representation).
+        :param model: the name of the model to use.
+            Read [Cohere documentation](https://docs.cohere.com/docs/models#embed) for a list of all supported models.
         :param input_type: specifies the type of input you're giving to the model. Supported values are
-            "search_document", "search_query", "classification" and "clustering". Not
-            required for older versions of the embedding models (meaning anything lower than v3), but is required for
-            more recent versions (meaning anything bigger than v2).
+            "search_document", "search_query", "classification" and "clustering".
         :param api_base_url: the Cohere API Base url.
         :param truncate: truncate embeddings that are too long from start or end, ("NONE"|"START"|"END").
             Passing "START" will discard the start of the input. "END" will discard the end of the input. In both
@@ -100,7 +108,7 @@ class CohereDocumentEmbedder:
             client_name="haystack",
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -123,7 +131,7 @@ class CohereDocumentEmbedder:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CohereDocumentEmbedder":
+    def from_dict(cls, data: dict[str, Any]) -> "CohereDocumentEmbedder":
         """
         Deserializes the component from a dictionary.
 
@@ -144,7 +152,7 @@ class CohereDocumentEmbedder:
 
         return default_from_dict(cls, data)
 
-    def _validate_input(self, documents: List[Document]) -> None:
+    def _validate_input(self, documents: list[Document]) -> None:
         if not isinstance(documents, list) or (documents and not isinstance(documents[0], Document)):
             msg = (
                 "CohereDocumentEmbedder expects a list of Documents as input."
@@ -152,11 +160,11 @@ class CohereDocumentEmbedder:
             )
             raise TypeError(msg)
 
-    def _prepare_texts_to_embed(self, documents: List[Document]) -> List[str]:
+    def _prepare_texts_to_embed(self, documents: list[Document]) -> list[str]:
         """
         Prepare the texts to embed by concatenating the Document text with the metadata fields to embed.
         """
-        texts_to_embed: List[str] = []
+        texts_to_embed: list[str] = []
         for doc in documents:
             meta_values_to_embed = [
                 str(doc.meta[key]) for key in self.meta_fields_to_embed if doc.meta.get(key) is not None
@@ -166,9 +174,10 @@ class CohereDocumentEmbedder:
             texts_to_embed.append(text_to_embed)
         return texts_to_embed
 
-    @component.output_types(documents=List[Document], meta=Dict[str, Any])
-    def run(self, documents: List[Document]) -> Dict[str, Union[List[Document], Dict[str, Any]]]:
-        """Embed a list of `Documents`.
+    @component.output_types(documents=list[Document], meta=dict[str, Any])
+    def run(self, documents: list[Document]) -> dict[str, list[Document] | dict[str, Any]]:
+        """
+        Embed a list of `Documents`.
 
         :param documents: documents to embed.
         :returns:  A dictionary with the following keys:
@@ -195,13 +204,14 @@ class CohereDocumentEmbedder:
             self.embedding_type,
         )
 
-        for doc, embeddings in zip(documents, all_embeddings):
-            doc.embedding = embeddings
+        new_documents = []
+        for doc, embeddings in zip(documents, all_embeddings, strict=True):
+            new_documents.append(replace(doc, embedding=embeddings))
 
-        return {"documents": documents, "meta": metadata}
+        return {"documents": new_documents, "meta": metadata}
 
-    @component.output_types(documents=List[Document], meta=Dict[str, Any])
-    async def run_async(self, documents: List[Document]) -> Dict[str, Union[List[Document], Dict[str, Any]]]:
+    @component.output_types(documents=list[Document], meta=dict[str, Any])
+    async def run_async(self, documents: list[Document]) -> dict[str, list[Document] | dict[str, Any]]:
         """
         Embed a list of `Documents` asynchronously.
 
@@ -228,7 +238,8 @@ class CohereDocumentEmbedder:
             embedding_type=self.embedding_type,
         )
 
-        for doc, embeddings in zip(documents, all_embeddings):
-            doc.embedding = embeddings
+        new_documents = []
+        for doc, embeddings in zip(documents, all_embeddings, strict=True):
+            new_documents.append(replace(doc, embedding=embeddings))
 
-        return {"documents": documents, "meta": metadata}
+        return {"documents": new_documents, "meta": metadata}

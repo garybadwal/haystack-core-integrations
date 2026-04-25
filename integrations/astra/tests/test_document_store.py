@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2023-present Anant Corporation <support@anant.us>
 #
 # SPDX-License-Identifier: Apache-2.0
+
 import operator
 import os
 from unittest import mock
@@ -9,7 +10,14 @@ import pytest
 from haystack import Document
 from haystack.document_stores.errors import MissingDocumentError
 from haystack.document_stores.types import DuplicatePolicy
-from haystack.testing.document_store import DocumentStoreBaseTests
+from haystack.testing.document_store import (
+    CountDocumentsByFilterTest,
+    CountUniqueMetadataByFilterTest,
+    DocumentStoreBaseExtendedTests,
+    GetMetadataFieldMinMaxTest,
+    GetMetadataFieldsInfoTest,
+    GetMetadataFieldUniqueValuesTest,
+)
 
 from haystack_integrations.document_stores.astra import AstraDocumentStore
 
@@ -42,14 +50,108 @@ def test_to_dict(mock_auth):  # noqa
         }
 
 
+@pytest.mark.usefixtures("mock_auth")
+@mock.patch("haystack_integrations.document_stores.astra.document_store.AstraClient")
+def test_count_documents_by_filter(mock_astra_client):
+    mock_index = mock_astra_client.return_value
+    mock_index.count_documents.return_value = 2
+
+    store = AstraDocumentStore()
+
+    count = store.count_documents_by_filter({"field": "meta.status", "operator": "==", "value": "draft"})
+
+    assert count == 2
+    mock_index.count_documents.assert_called_once_with(
+        filters={"meta.status": {"$eq": "draft"}}, upper_bound=1_000_000_000
+    )
+
+
+@pytest.mark.usefixtures("mock_auth")
+@mock.patch("haystack_integrations.document_stores.astra.document_store.AstraClient")
+def test_count_unique_metadata_by_filter(mock_astra_client):
+    mock_index = mock_astra_client.return_value
+    mock_index.distinct.side_effect = [["news", "docs", ["docs", "faq"], None], [1, 2, 2]]
+
+    store = AstraDocumentStore()
+
+    counts = store.count_unique_metadata_by_filter(
+        {"field": "meta.status", "operator": "==", "value": "published"}, ["category", "priority"]
+    )
+
+    assert counts == {"category": 3, "priority": 2}
+    assert mock_index.distinct.call_args_list == [
+        mock.call("meta.category", filters={"meta.status": {"$eq": "published"}}),
+        mock.call("meta.priority", filters={"meta.status": {"$eq": "published"}}),
+    ]
+
+
+@pytest.mark.usefixtures("mock_auth")
+@mock.patch("haystack_integrations.document_stores.astra.document_store.AstraClient")
+def test_get_metadata_fields_info(mock_astra_client):
+    mock_index = mock_astra_client.return_value
+    mock_index.find_documents.return_value = [
+        {"content": "Doc 1", "meta": {"category": "news", "priority": 1, "active": True}},
+        {"content": "Doc 2", "meta": {"category": "docs", "priority": 2.5, "tags": ["a", "b"]}},
+    ]
+
+    store = AstraDocumentStore()
+
+    fields_info = store.get_metadata_fields_info()
+
+    assert fields_info == {
+        "content": {"type": "text"},
+        "category": {"type": "keyword"},
+        "priority": {"type": "long"},
+        "active": {"type": "boolean"},
+        "tags": {"type": "keyword"},
+    }
+    mock_index.find_documents.assert_called_once_with({}, projection={"content": 1, "meta": 1})
+
+
+@pytest.mark.usefixtures("mock_auth")
+@mock.patch("haystack_integrations.document_stores.astra.document_store.AstraClient")
+def test_get_metadata_field_min_max(mock_astra_client):
+    mock_index = mock_astra_client.return_value
+    mock_index.distinct.return_value = [10, 3, 7]
+
+    store = AstraDocumentStore()
+
+    result = store.get_metadata_field_min_max("priority")
+
+    assert result == {"min": 3, "max": 10}
+    mock_index.distinct.assert_called_once_with("meta.priority")
+
+
+@pytest.mark.usefixtures("mock_auth")
+@mock.patch("haystack_integrations.document_stores.astra.document_store.AstraClient")
+def test_get_metadata_field_unique_values(mock_astra_client):
+    mock_index = mock_astra_client.return_value
+    mock_index.distinct.return_value = ["Beta", "alpha", ["gamma", "alphabet"], None]
+
+    store = AstraDocumentStore()
+
+    values, total_count = store.get_metadata_field_unique_values("category", search_term="alp", from_=0, size=5)
+
+    assert values == ["alpha", "alphabet"]
+    assert total_count == 2
+    mock_index.distinct.assert_called_once_with("meta.category")
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(
     os.environ.get("ASTRA_DB_APPLICATION_TOKEN", "") == "", reason="ASTRA_DB_APPLICATION_TOKEN env var not set"
 )
 @pytest.mark.skipif(os.environ.get("ASTRA_DB_API_ENDPOINT", "") == "", reason="ASTRA_DB_API_ENDPOINT env var not set")
-class TestDocumentStore(DocumentStoreBaseTests):
+class TestDocumentStore(
+    DocumentStoreBaseExtendedTests,
+    CountDocumentsByFilterTest,
+    CountUniqueMetadataByFilterTest,
+    GetMetadataFieldsInfoTest,
+    GetMetadataFieldMinMaxTest,
+    GetMetadataFieldUniqueValuesTest,
+):
     """
-    Common test cases will be provided by `DocumentStoreBaseTests` but
+    Common test cases will be provided by `DocumentStoreBaseExtendedTests` but
     you can add more to this class.
     """
 
@@ -69,7 +171,8 @@ class TestDocumentStore(DocumentStoreBaseTests):
         document_store.delete_all_documents()
         assert document_store.count_documents() == 0
 
-    def assert_documents_are_equal(self, received: list[Document], expected: list[Document]):
+    @staticmethod
+    def assert_documents_are_equal(received: list[Document], expected: list[Document]):
         """
         Assert that two lists of Documents are equal.
         This is used in every test, if a Document Store implementation has a different behaviour
@@ -86,7 +189,7 @@ class TestDocumentStore(DocumentStoreBaseTests):
         document_store.write_documents(filterable_docs)
         result = document_store.filter_documents(filters={"field": "meta.number", "operator": "==", "value": None})
         # Astra does not support filtering on None, it returns empty list
-        self.assert_documents_are_equal(result, [])
+        TestDocumentStore.assert_documents_are_equal(result, [])
 
     def test_write_documents(self, document_store: AstraDocumentStore):
         """
@@ -97,9 +200,9 @@ class TestDocumentStore(DocumentStoreBaseTests):
         doc2 = Document(id="1", content="test doc 2")
 
         assert document_store.write_documents([doc2], policy=DuplicatePolicy.OVERWRITE) == 1
-        self.assert_documents_are_equal(document_store.filter_documents(), [doc2])
+        TestDocumentStore.assert_documents_are_equal(document_store.filter_documents(), [doc2])
         assert document_store.write_documents(documents=[doc1], policy=DuplicatePolicy.OVERWRITE) == 1
-        self.assert_documents_are_equal(document_store.filter_documents(), [doc1])
+        TestDocumentStore.assert_documents_are_equal(document_store.filter_documents(), [doc1])
 
     def test_write_documents_skip_duplicates(self, document_store: AstraDocumentStore):
         docs = [
@@ -176,7 +279,7 @@ class TestDocumentStore(DocumentStoreBaseTests):
         document_store.write_documents(filterable_docs)
         result = document_store.filter_documents(filters=filter_criteria)
 
-        self.assert_documents_are_equal(
+        TestDocumentStore.assert_documents_are_equal(
             result,
             [
                 d
@@ -190,7 +293,7 @@ class TestDocumentStore(DocumentStoreBaseTests):
         docs = [Document(id="1", content="test doc 1"), Document(id="2", content="test doc 2")]
         document_store.write_documents(docs)
         result = document_store.filter_documents(filters={"field": "id", "operator": "==", "value": "1"})
-        self.assert_documents_are_equal(result, [docs[0]])
+        TestDocumentStore.assert_documents_are_equal(result, [docs[0]])
 
     def test_filter_documents_by_in_operator(self, document_store):
         docs = [Document(id="3", content="test doc 3"), Document(id="4", content="test doc 4")]
@@ -200,15 +303,8 @@ class TestDocumentStore(DocumentStoreBaseTests):
         # Sort the result in place by the id field
         result.sort(key=lambda x: x.id)
 
-        self.assert_documents_are_equal([result[0]], [docs[0]])
-        self.assert_documents_are_equal([result[1]], [docs[1]])
-
-    def test_delete_all_documents(self, document_store: AstraDocumentStore):
-        """
-        Test delete_all_documents() on an Astra.
-        """
-        document_store.delete_all_documents()
-        assert document_store.count_documents() == 0
+        TestDocumentStore.assert_documents_are_equal([result[0]], [docs[0]])
+        TestDocumentStore.assert_documents_are_equal([result[1]], [docs[1]])
 
     @pytest.mark.skip(reason="Unsupported filter operator not.")
     def test_not_operator(self, document_store, filterable_docs):

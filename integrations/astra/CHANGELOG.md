@@ -1,11 +1,73 @@
 # Changelog
 
-## [integrations/astra-v3.0.1]
+## [integrations/astra-v4.2.0] - 2026-03-24
+
+### 🚀 Features
+
+- *(astra)* Add run_async to AstraEmbeddingRetriever (#3016)
+
+### 🐛 Bug Fixes
+
+- Converting to `staticmethod` some tests in `AstraDocumentStore` (#2928)
+
+### 🧪 Testing
+
+- `AstraDocumentStore` use Mixin tests (#3027)
 
 ### 🧹 Chores
 
-- Adopt PEP 585 type hinting
+- Add missing -> None return type annotations to astra __init__ methods (#2974)
+- Enforce ruff docstring rules (D102/D103/D205/D209/D213/D417/D419) in first 10 integrations (#3008)
+- Increase lower pins for 3.14 support in some integrations + test with 3.14 (#3033)
 
+
+## [integrations/integrations/astra-v4.1.0] - 2026-03-06
+
+### 🚀 Features
+
+- Add Astra document store operations (#2904)
+
+### 📚 Documentation
+
+- Fix some invalid raises directives (#2847)
+- Simplify pydoc configs (#2855)
+
+### 🧪 Testing
+
+- Replacing each `DocumentStore` specific tests and used the generalised ones from `haystack.testing.document_store` (#2812)
+
+### 🧹 Chores
+
+- Remove unused allow-direct-references (#2866)
+- Standardize author mentions (#2897)
+
+
+## [integrations/astra-v4.0.0] - 2026-01-12
+
+### 🧹 Chores
+
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Astra - drop Python 3.9 and use X|Y typing (#2694)
+
+
+## [integrations/astra-v3.1.0] - 2025-12-30
+
+### 🚀 Features
+
+- Adding `delete_by_filter` and `update_by_filter` (#2631)
+
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+
+### 🌀 Miscellaneous
+
+- Adopt PEP 585 type hinting (part 1) (#2509)
 
 ## [integrations/astra-v3.0.0] - 2025-10-21
 

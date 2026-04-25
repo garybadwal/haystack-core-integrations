@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
 
 from haystack import component, default_from_dict, default_to_dict
 from haystack.dataclasses import Document
@@ -62,12 +62,14 @@ class PgvectorEmbeddingRetriever:
         self,
         *,
         document_store: PgvectorDocumentStore,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: dict[str, Any] | None = None,
         top_k: int = 10,
-        vector_function: Optional[Literal["cosine_similarity", "inner_product", "l2_distance"]] = None,
-        filter_policy: Union[str, FilterPolicy] = FilterPolicy.REPLACE,
-    ):
+        vector_function: Literal["cosine_similarity", "inner_product", "l2_distance"] | None = None,
+        filter_policy: str | FilterPolicy = FilterPolicy.REPLACE,
+    ) -> None:
         """
+        Initialize the PgvectorEmbeddingRetriever.
+
         :param document_store: An instance of `PgvectorDocumentStore`.
         :param filters: Filters applied to the retrieved Documents.
         :param top_k: Maximum number of Documents to return.
@@ -99,7 +101,7 @@ class PgvectorEmbeddingRetriever:
             filter_policy if isinstance(filter_policy, FilterPolicy) else FilterPolicy.from_str(filter_policy)
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -116,7 +118,7 @@ class PgvectorEmbeddingRetriever:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PgvectorEmbeddingRetriever":
+    def from_dict(cls, data: dict[str, Any]) -> "PgvectorEmbeddingRetriever":
         """
         Deserializes the component from a dictionary.
 
@@ -133,14 +135,14 @@ class PgvectorEmbeddingRetriever:
             data["init_parameters"]["filter_policy"] = FilterPolicy.from_str(filter_policy)
         return default_from_dict(cls, data)
 
-    @component.output_types(documents=List[Document])
+    @component.output_types(documents=list[Document])
     def run(
         self,
-        query_embedding: List[float],
-        filters: Optional[Dict[str, Any]] = None,
-        top_k: Optional[int] = None,
-        vector_function: Optional[Literal["cosine_similarity", "inner_product", "l2_distance"]] = None,
-    ) -> Dict[str, List[Document]]:
+        query_embedding: list[float],
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
+        vector_function: Literal["cosine_similarity", "inner_product", "l2_distance"] | None = None,
+    ) -> dict[str, list[Document]]:
         """
         Retrieve documents from the `PgvectorDocumentStore`, based on their embeddings.
 
@@ -166,14 +168,14 @@ class PgvectorEmbeddingRetriever:
         )
         return {"documents": docs}
 
-    @component.output_types(documents=List[Document])
+    @component.output_types(documents=list[Document])
     async def run_async(
         self,
-        query_embedding: List[float],
-        filters: Optional[Dict[str, Any]] = None,
-        top_k: Optional[int] = None,
-        vector_function: Optional[Literal["cosine_similarity", "inner_product", "l2_distance"]] = None,
-    ) -> Dict[str, List[Document]]:
+        query_embedding: list[float],
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
+        vector_function: Literal["cosine_similarity", "inner_product", "l2_distance"] | None = None,
+    ) -> dict[str, list[Document]]:
         """
         Asynchronously retrieve documents from the `PgvectorDocumentStore`, based on their embeddings.
 

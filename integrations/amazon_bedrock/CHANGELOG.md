@@ -1,10 +1,168 @@
 # Changelog
 
-## [integrations/amazon_bedrock-v5.2.0] - 2025-10-22
+## [integrations/amazon_bedrock-v6.8.1] - 2026-04-22
+
+### 🐛 Bug Fixes
+
+- *(amazon-bedrock)* Prevent double-wrapping of tools_cachepoint_config in _format_tools (#3199)
+
+### 🧪 Testing
+
+- Bedrock - increase unit tests coverage (#3165)
+
+
+## [integrations/amazon_bedrock-v6.8.0] - 2026-04-09
+
+### 🚀 Features
+
+- Add JSON structured output support to `BedrockChatGenerator` (#3108)
+
+### 🧪 Testing
+
+- Track test coverage for all integrations (#3065)
+- Bedrock - use Sonnet 4.6 due to 3.5 EOL (#3071)
+
+
+## [integrations/amazon_bedrock-v6.7.1] - 2026-03-25
+
+### 📚 Documentation
+
+- Better docstring for boto3_config explaining retries (#3042)
+
+
+## [integrations/amazon_bedrock-v6.7.0] - 2026-03-24
+
+### 🚀 Features
+
+- Add configurable environment variable names to `S3FileDownloader` init params (#3015)
+
+
+## [integrations/amazon_bedrock-v6.6.0] - 2026-03-23
+
+### 🚀 Features
+
+- Use reasoning field in StreamingChunk for Bedrock (#2901)
+
+### 📚 Documentation
+
+- Move misplaced docstring in AmazonBedrockRanker.__init__ (#2970)
+
+### 🧪 Testing
+
+- Test compatible integrations with python 3.14; update pyproject (#3001)
+
+### 🧹 Chores
+
+- Enforce ruff docstring rules (D102/D103/D205/D209/D213/D417/D419) in first 10 integrations (#3008)
+- Drop redacted thinking support for AmazonBedrockChatGenerator (#2998)
+
+
+## [integrations/amazon_bedrock-v6.5.0] - 2026-03-03
+
+### 🚀 Features
+
+- Bedrock - support for FileContent + citations (#2883)
+
+### 📚 Documentation
+
+- Fix docstring for AmazonBedrockChatGenerator (#2813)
+- Simplify pydoc configs (#2855)
+
+
+## [integrations/amazon_bedrock-v6.4.0] - 2026-02-05
+
+### 🚀 Features
+
+- Bedrock - support prompt caching (#2796)
+
+### 🧹 Chores
+
+- *(amazon_bedrock)* Simplify Secret (de-)serialization (#2808)
+
+
+## [integrations/amazon_bedrock-v6.3.0] - 2026-01-28
+
+### 🌀 Miscellaneous
+
+- Feat: Bedrock - support images in tool results (#2783)
+
+## [integrations/amazon_bedrock-v6.2.1] - 2026-01-15
+
+### 🐛 Bug Fixes
+
+- None value handling of flattened generation kwargs for AmazonBedrockChatGenerator (#2752)
+
+
+## [integrations/amazon_bedrock-v6.2.0] - 2026-01-13
+
+### 🚀 Features
+
+- Support flattened generation_kwargs with AmazonBedrockChatGenerator (#2741)
+
+
+## [integrations/amazon_bedrock-v6.1.1] - 2026-01-13
+
+### 🌀 Miscellaneous
+
+- Fix: support global and regional inference profiles in `AmazonBedrockGenerator` (#2725)
+
+## [integrations/amazon_bedrock-v6.1.0] - 2026-01-13
+
+### 🐛 Bug Fixes
+
+- AmazonBedrockDocumentEmbedder to not modify Documents in place (#2174) (#2702)
+
+
+## [integrations/amazon_bedrock-v6.0.0] - 2026-01-09
+
+### 🧹 Chores
+
+- [**breaking**] Amazon_bedrock - drop Python 3.9 and use X|Y typing (#2685)
+
+
+## [integrations/amazon_bedrock-v5.4.0] - 2026-01-08
+
+### 🚀 Features
+
+- Update `S3Downloader` to auto call run `warm_up` on first run instead raising error (#2673)
+
+### 🧹 Chores
+
+- Make fmt command more forgiving (#2671)
+
+### 🌀 Miscellaneous
+
+- Fix: Fix doc links (#2661)
+
+## [integrations/amazon_bedrock-v5.3.1] - 2025-12-19
+
+### 🐛 Bug Fixes
+
+- Relax model name validation for Bedrock Embedders (#2625)
+
+
+## [integrations/amazon_bedrock-v5.3.0] - 2025-12-17
 
 ### 🚀 Features
 
 - `AmazonBedrockChatGenerator` update tools param to ToolsType (#2415)
+- Cohere Embed v4 support in Bedrock (#2612)
+
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+
+### 🌀 Miscellaneous
+
+- Adopt PEP 585 type hinting (part 2) (#2508)
 
 ## [integrations/amazon_bedrock-v5.1.0] - 2025-09-29
 
@@ -12,27 +170,21 @@
 
 - S3Downloader - add `s3_key_generation_function` param to customize S3 key generation (#2343)
 
+
 ## [integrations/amazon_bedrock-v5.0.0] - 2025-09-22
-
-### 🧹 Chores
-
-- [**breaking**] Remove deprecated `BedrockRanker` (use `AmazonBedrockRanker` instead) (#2287)
-
-## [integrations/amazon_bedrock-v4.2.0] - 2025-09-19
-
-### 🚀 Features
-
-- Add a new `S3Downloader` component (#2192)
-
-## [integrations/amazon_bedrock-v4.1.0] - 2025-09-19
 
 ### 🚀 Features
 
 - Support AWS Bedrock Guardrails in `AmazonBedrockChatGenerator` (#2284)
+- Add a new `S3Downloader` component (#2192)
+
+### 📚 Documentation
+
 
 ### 🧹 Chores
 
 - Bedrock - remove unused `stop_words` init parameter (#2275)
+- [**breaking**] Remove deprecated `BedrockRanker` (use `AmazonBedrockRanker` instead) (#2287)
 
 ### 🌀 Miscellaneous
 

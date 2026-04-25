@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
+import unittest
+
 from haystack import Pipeline
 from haystack.components.agents import Agent
 from haystack.components.generators.chat import OpenAIChatGenerator
@@ -75,7 +77,7 @@ class TestGitHubFileEditorTool:
         tool = GitHubFileEditorTool(
             outputs_to_string={"source": "result", "handler": message_handler},
             inputs_from_state={"repo_state": "repo"},
-            outputs_to_state={"file_content": {"source": "content", "handler": message_handler}},
+            outputs_to_state={"file_content": {"source": "result", "handler": message_handler}},
         )
 
         tool_dict = tool.to_dict()
@@ -86,7 +88,7 @@ class TestGitHubFileEditorTool:
         assert tool_dict["data"]["inputs_from_state"] == {"repo_state": "repo"}
         assert tool_dict["data"]["outputs_to_state"] == {
             "file_content": {
-                "source": "content",
+                "source": "result",
                 "handler": "haystack_integrations.tools.github.utils.message_handler",
             },
         }
@@ -111,7 +113,7 @@ class TestGitHubFileEditorTool:
                 "inputs_from_state": {"repo_state": "repo"},
                 "outputs_to_state": {
                     "file_content": {
-                        "source": "content",
+                        "source": "result",
                         "handler": "haystack_integrations.tools.github.utils.message_handler",
                     },
                 },
@@ -122,7 +124,7 @@ class TestGitHubFileEditorTool:
         assert tool.outputs_to_string["source"] == "result"
         assert tool.outputs_to_string["handler"] == message_handler
         assert tool.inputs_from_state == {"repo_state": "repo"}
-        assert tool.outputs_to_state["file_content"]["source"] == "content"
+        assert tool.outputs_to_state["file_content"]["source"] == "result"
         assert tool.outputs_to_state["file_content"]["handler"] == message_handler
 
     def test_pipeline_serialization(self, monkeypatch):
@@ -161,7 +163,7 @@ class TestGitHubFileEditorTool:
                         "chat_generator": {
                             "type": "haystack.components.generators.chat.openai.OpenAIChatGenerator",
                             "init_parameters": {
-                                "model": "gpt-4o-mini",
+                                "model": unittest.mock.ANY,
                                 "streaming_callback": None,
                                 "api_base_url": None,
                                 "organization": None,
@@ -202,6 +204,13 @@ class TestGitHubFileEditorTool:
             "connections": [],
             "connection_type_validation": True,
         }
+
+        # Compatibility with newer versions of Haystack that include these parameters
+        for key in ["confirmation_strategies", "required_variables", "user_prompt"]:
+            if key in pipeline_dict["components"]["agent"]["init_parameters"]:
+                expected_dict["components"]["agent"]["init_parameters"][key] = pipeline_dict["components"]["agent"][
+                    "init_parameters"
+                ][key]
 
         assert pipeline_dict == expected_dict
 

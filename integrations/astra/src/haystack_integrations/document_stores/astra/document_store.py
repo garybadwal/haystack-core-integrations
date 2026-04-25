@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: 2023-present Anant Corporation <support@anant.us>
 #
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Optional, Union
+
+from collections.abc import Generator
+from typing import Any
 
 from haystack import default_from_dict, default_to_dict, logging
 from haystack.dataclasses import Document
@@ -19,7 +21,7 @@ logger = logging.getLogger(__name__)
 MAX_BATCH_SIZE = 20
 
 
-def _batches(input_list, batch_size):
+def _batches(input_list: list[Any], batch_size: int) -> Generator[list[Any], None, None]:
     input_length = len(input_list)
     for ndx in range(0, input_length, batch_size):
         yield input_list[ndx : min(ndx + batch_size, input_length)]
@@ -51,10 +53,11 @@ class AstraDocumentStore:
         embedding_dimension: int = 768,
         duplicates_policy: DuplicatePolicy = DuplicatePolicy.NONE,
         similarity: str = "cosine",
-        namespace: Optional[str] = None,
-    ):
+        namespace: str | None = None,
+    ) -> None:
         """
         The connection to Astra DB is established and managed through the JSON API.
+
         The required credentials (api endpoint and application token) can be generated
         through the UI by clicking and the connect tab, and then selecting JSON API and
         Generate Configuration.
@@ -99,10 +102,11 @@ class AstraDocumentStore:
         self.duplicates_policy = duplicates_policy
         self.similarity = similarity
         self.namespace = namespace
-        self._index: Optional[AstraClient] = None
+        self._index: AstraClient | None = None
 
     @property
     def index(self) -> AstraClient:
+        """Return the AstraClient index, initializing it if necessary."""
         if self._index is None:
             self._index = AstraClient(
                 self.resolved_api_endpoint,
@@ -176,7 +180,7 @@ class AstraDocumentStore:
 
         batch_size = MAX_BATCH_SIZE
 
-        def _convert_input_document(document: Union[dict, Document]) -> dict[str, Any]:
+        def _convert_input_document(document: dict | Document) -> dict[str, Any]:
             if isinstance(document, Document):
                 document_dict = document.to_dict(flatten=False)
             elif isinstance(document, dict):
@@ -283,7 +287,60 @@ class AstraDocumentStore:
         """
         return self.index.count_documents()
 
-    def filter_documents(self, filters: Optional[dict[str, Any]] = None) -> list[Document]:
+    @staticmethod
+    def _normalize_new_filter_input(filters: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(filters, dict):
+            msg = "Filters must be a dictionary"
+            raise AstraDocumentStoreFilterError(msg)
+
+        normalized_filters = filters.copy()
+        if "id" in normalized_filters:
+            normalized_filters["_id"] = normalized_filters.pop("id")
+
+        return normalized_filters
+
+    @staticmethod
+    def _infer_metadata_field_type(values: list[Any]) -> str:
+        inferred_types = set()
+        for value in values:
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, bool):
+                        inferred_types.add("boolean")
+                    elif isinstance(item, int | float):
+                        inferred_types.add("long")
+                    elif isinstance(item, str):
+                        inferred_types.add("keyword")
+            elif isinstance(value, bool):
+                inferred_types.add("boolean")
+            elif isinstance(value, int | float):
+                inferred_types.add("long")
+            elif isinstance(value, str):
+                inferred_types.add("keyword")
+
+        if not inferred_types:
+            return "keyword"
+
+        if len(inferred_types) > 1:
+            logger.warning("Field has mixed metadata types {types}. Defaulting to 'keyword'.", types=inferred_types)
+            return "keyword"
+
+        return next(iter(inferred_types))
+
+    @staticmethod
+    def _normalize_distinct_values(values: list[Any]) -> list[str]:
+        normalized_values: set[str] = set()
+        for value in values:
+            if isinstance(value, list):
+                normalized_values.update(str(item) for item in value)
+            elif value is not None:
+                normalized_values.add(str(value))
+        return sorted(normalized_values)
+
+    def _get_metadata_projection_documents(self) -> list[dict[str, Any]]:
+        return self.index.find_documents({}, projection={"content": 1, "meta": 1})
+
+    def filter_documents(self, filters: dict[str, Any] | None = None) -> list[Document]:
         """
         Returns at most 1000 documents that match the filter.
 
@@ -369,9 +426,7 @@ class AstraDocumentStore:
             raise MissingDocumentError(msg)
         return ret[0]
 
-    def search(
-        self, query_embedding: list[float], top_k: int, filters: Optional[dict[str, Any]] = None
-    ) -> list[Document]:
+    def search(self, query_embedding: list[float], top_k: int, filters: dict[str, Any] | None = None) -> list[Document]:
         """
         Perform a search for a list of queries.
 
@@ -400,7 +455,6 @@ class AstraDocumentStore:
         Deletes documents from the document store.
 
         :param document_ids: IDs of the documents to delete.
-        :param delete_all: if `True`, delete all documents.
         :raises MissingDocumentError: if no document was deleted but document IDs were provided.
         """
         if self.index.find_one_document({"filter": {}}) is not None:
@@ -420,7 +474,6 @@ class AstraDocumentStore:
         """
         Deletes all documents from the document store.
         """
-        deletion_counter = 0
 
         try:
             deletion_counter = self.index.delete_all_documents()
@@ -432,3 +485,149 @@ class AstraDocumentStore:
             logger.info("All documents deleted")
         else:
             logger.error("Could not delete all documents")
+
+    def delete_by_filter(self, filters: dict[str, Any]) -> int:
+        """
+        Deletes documents that match the provided filters.
+
+        :param filters: The filters to apply to find documents to delete.
+        :returns: The number of documents deleted.
+        :raises AstraDocumentStoreFilterError: if the filter is invalid or not supported.
+        """
+        if not isinstance(filters, dict):
+            msg = "Filters must be a dictionary"
+            raise AstraDocumentStoreFilterError(msg)
+
+        if "id" in filters:
+            filters["_id"] = filters.pop("id")
+
+        converted_filters = _convert_filters(filters)
+        deletion_count = self.index.delete(filters=converted_filters)
+
+        logger.info(f"{deletion_count} documents deleted by filter")
+        return deletion_count
+
+    def update_by_filter(self, filters: dict[str, Any], meta: dict[str, Any]) -> int:
+        """
+        Updates documents that match the provided filters with the given metadata.
+
+        :param filters: The filters to apply to find documents to update.
+        :param meta: The metadata fields to update. This will be merged with existing metadata.
+
+        :returns:
+            The number of documents updated.
+
+        :raises AstraDocumentStoreFilterError: if the filter is invalid or not supported.
+        """
+        if not isinstance(filters, dict):
+            msg = "Filters must be a dictionary"
+            raise AstraDocumentStoreFilterError(msg)
+
+        if not isinstance(meta, dict):
+            msg = "Meta must be a dictionary"
+            raise AstraDocumentStoreFilterError(msg)
+
+        if "id" in filters:
+            filters["_id"] = filters.pop("id")
+
+        converted_filters = _convert_filters(filters)
+
+        # use dot notation to update nested fields in the meta-object - ensures fields are created if they don't exist
+        update_fields = {f"meta.{key}": value for key, value in meta.items()}
+        update_operation = {"$set": update_fields}
+        update_count = self.index.update(filters=converted_filters, update=update_operation)  # type: ignore
+
+        logger.info(f"{update_count} documents updated by filter")
+
+        return update_count
+
+    def count_documents_by_filter(self, filters: dict[str, Any]) -> int:
+        """
+        Applies a filter and counts the documents that matched it.
+
+        :param filters: The filters to apply to the document list.
+        :returns: The number of documents that match the filter.
+        """
+        normalized_filters = AstraDocumentStore._normalize_new_filter_input(filters)
+        converted_filters = _convert_filters(normalized_filters)
+        return self.index.count_documents(filters=converted_filters, upper_bound=1_000_000_000)
+
+    def count_unique_metadata_by_filter(self, filters: dict[str, Any], metadata_fields: list[str]) -> dict[str, int]:
+        """
+        Applies a filter selecting documents and counts the unique values for each meta field of the matched documents.
+
+        :param filters: The filters to apply to the document list.
+        :param metadata_fields: The metadata fields to count unique values for.
+        :returns: A dictionary where the keys are the metadata field names and the values are the count of unique
+            values.
+        """
+        normalized_filters = AstraDocumentStore._normalize_new_filter_input(filters)
+        converted_filters = _convert_filters(normalized_filters)
+
+        counts = {}
+        for field in metadata_fields:
+            distinct_values = self.index.distinct(f"meta.{field}", filters=converted_filters)
+            counts[field] = len(AstraDocumentStore._normalize_distinct_values(distinct_values))
+        return counts
+
+    def get_metadata_fields_info(self) -> dict[str, dict[str, str]]:
+        """
+        Returns the metadata fields and the corresponding types.
+
+        :returns: A dictionary mapping field names to dictionaries with a `type` key.
+        """
+        documents = self._get_metadata_projection_documents()
+        if not documents:
+            return {}
+
+        fields_info: dict[str, dict[str, str]] = {}
+
+        if any(document.get("content") is not None for document in documents):
+            fields_info["content"] = {"type": "text"}
+
+        field_values: dict[str, list[Any]] = {}
+        for document in documents:
+            for field, value in document.get("meta", {}).items():
+                field_values.setdefault(field, []).append(value)
+
+        for field, values in field_values.items():
+            fields_info[field] = {"type": self._infer_metadata_field_type(values)}
+
+        return fields_info
+
+    def get_metadata_field_min_max(self, metadata_field: str) -> dict[str, Any]:
+        """
+        For a given metadata field, find its max and min value.
+
+        :param metadata_field: The metadata field to inspect.
+        :returns: A dictionary with `min` and `max`.
+        """
+
+        field = metadata_field.removeprefix("meta.")
+        distinct_values = self.index.distinct(f"meta.{field}")
+        comparable_values = [value for value in distinct_values if isinstance(value, str | int | float | bool)]
+        if not comparable_values:
+            return {"min": None, "max": None}
+
+        return {"min": min(comparable_values), "max": max(comparable_values)}
+
+    def get_metadata_field_unique_values(
+        self, metadata_field: str, search_term: str | None = None, from_: int = 0, size: int = 10
+    ) -> tuple[list[str], int]:
+        """
+        Retrieves unique values for a field matching a search term or all possible values if no search term is given.
+
+        :param metadata_field: The metadata field to inspect.
+        :param search_term: Optional case-insensitive substring search term.
+        :param from_: The starting index for pagination.
+        :param size: The number of values to return.
+        :returns: A tuple containing the paginated values and the total count.
+        """
+        field = metadata_field.removeprefix("meta.")
+        values = AstraDocumentStore._normalize_distinct_values(self.index.distinct(f"meta.{field}"))
+        if search_term:
+            search_term_lower = search_term.lower()
+            values = [value for value in values if search_term_lower in value.lower()]
+
+        total_count = len(values)
+        return values[from_ : from_ + size], total_count

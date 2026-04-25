@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar
 
 from haystack import component, default_to_dict, logging
 from haystack.components.generators.chat import OpenAIChatGenerator
@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 class MistralChatGenerator(OpenAIChatGenerator):
     """
     Enables text generation using Mistral AI generative models.
-    For supported models, see [Mistral AI docs](https://docs.mistral.ai/platform/endpoints/#operation/listModels).
+
+    For supported models, see [Mistral AI docs](https://docs.mistral.ai/getting-started/models).
 
     Users can pass any text generation parameters valid for the Mistral Chat Completion API
     directly to this component via the `generation_kwargs` parameter in `__init__` or the `generation_kwargs`
@@ -34,7 +35,7 @@ class MistralChatGenerator(OpenAIChatGenerator):
     This component uses the ChatMessage format for structuring both input and output,
     ensuring coherent and contextually relevant responses in chat-based text generation scenarios.
     Details on the ChatMessage format can be found in the
-    [Haystack docs](https://docs.haystack.deepset.ai/v2.0/docs/data-classes#chatmessage)
+    [Haystack docs](https://docs.haystack.deepset.ai/docs/data-classes#chatmessage)
 
     For more details on the parameters supported by the Mistral API, refer to the
     [Mistral API Docs](https://docs.mistral.ai/api/).
@@ -59,22 +60,74 @@ class MistralChatGenerator(OpenAIChatGenerator):
     ```
     """
 
+    SUPPORTED_MODELS: ClassVar[list[str]] = [
+        "mistral-medium-2505",
+        "mistral-medium-2508",
+        "mistral-medium-latest",
+        "mistral-medium",
+        "mistral-vibe-cli-with-tools",
+        "open-mistral-nemo",
+        "open-mistral-nemo-2407",
+        "mistral-tiny-2407",
+        "mistral-tiny-latest",
+        "codestral-2508",
+        "codestral-latest",
+        "devstral-2512",
+        "mistral-vibe-cli-latest",
+        "devstral-medium-latest",
+        "devstral-latest",
+        "mistral-small-2506",
+        "mistral-small-latest",
+        "labs-mistral-small-creative",
+        "magistral-medium-2509",
+        "magistral-medium-latest",
+        "magistral-small-2509",
+        "magistral-small-latest",
+        "voxtral-small-2507",
+        "voxtral-small-latest",
+        "mistral-large-2512",
+        "mistral-large-latest",
+        "ministral-3b-2512",
+        "ministral-3b-latest",
+        "ministral-8b-2512",
+        "ministral-8b-latest",
+        "ministral-14b-2512",
+        "ministral-14b-latest",
+        "mistral-large-2411",
+        "pixtral-large-2411",
+        "pixtral-large-latest",
+        "mistral-large-pixtral-2411",
+        "devstral-small-2507",
+        "devstral-medium-2507",
+        "labs-devstral-small-2512",
+        "devstral-small-latest",
+        "voxtral-mini-2507",
+        "voxtral-mini-latest",
+        "voxtral-mini-2602",
+        "voxtral-mini-latest",
+        "voxtral-mini-2507",
+    ]
+    """A list of models supported by Mistral AI
+    see [Mistral AI docs](https://docs.mistral.ai/getting-started/models) for more information
+    and send a GET HTTP request to "https://api.mistral.ai/v1/models" for a full list of model IDs."""
+
     def __init__(
         self,
         api_key: Secret = Secret.from_env_var("MISTRAL_API_KEY"),
         model: str = "mistral-small-latest",
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        api_base_url: Optional[str] = "https://api.mistral.ai/v1",
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
+        streaming_callback: StreamingCallbackT | None = None,
+        api_base_url: str | None = "https://api.mistral.ai/v1",
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
         *,
-        timeout: Optional[float] = None,
-        max_retries: Optional[int] = None,
-        http_client_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        http_client_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """
-        Creates an instance of MistralChatGenerator. Unless specified otherwise in the `model`, this is for Mistral's
-        `mistral-small-latest` model.
+        Creates an instance of MistralChatGenerator.
+
+        Unless specified otherwise in the `model`, this is for Mistral's `mistral-small-latest` model.
 
         :param api_key:
             The Mistral API key.
@@ -137,10 +190,10 @@ class MistralChatGenerator(OpenAIChatGenerator):
         self,
         *,
         messages: list[ChatMessage],
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        generation_kwargs: Optional[dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
-        tools_strict: Optional[bool] = None,
+        streaming_callback: StreamingCallbackT | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
+        tools_strict: bool | None = None,
     ) -> dict[str, Any]:
         api_args = super(MistralChatGenerator, self)._prepare_api_call(  # noqa: UP008
             messages=messages,
@@ -155,7 +208,7 @@ class MistralChatGenerator(OpenAIChatGenerator):
             api_args.pop("response_format")
         return api_args
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize this component to a dictionary.
 

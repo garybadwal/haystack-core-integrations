@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 from haystack import component, default_from_dict, default_to_dict, logging, tracing
@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 class LangfuseConnector:
     """
     LangfuseConnector connects Haystack LLM framework with [Langfuse](https://langfuse.com) in order to enable the
+
     tracing of operations and data flow within various components of a pipeline.
 
     To use LangfuseConnector, add it to your pipeline without connecting it to any other components.
@@ -118,13 +119,13 @@ class LangfuseConnector:
         self,
         name: str,
         public: bool = False,
-        public_key: Optional[Secret] = Secret.from_env_var("LANGFUSE_PUBLIC_KEY"),  # noqa: B008
-        secret_key: Optional[Secret] = Secret.from_env_var("LANGFUSE_SECRET_KEY"),  # noqa: B008
-        httpx_client: Optional[httpx.Client] = None,
-        span_handler: Optional[SpanHandler] = None,
+        public_key: Secret | None = Secret.from_env_var("LANGFUSE_PUBLIC_KEY"),  # noqa: B008
+        secret_key: Secret | None = Secret.from_env_var("LANGFUSE_SECRET_KEY"),  # noqa: B008
+        httpx_client: httpx.Client | None = None,
+        span_handler: SpanHandler | None = None,
         *,
-        host: Optional[str] = None,
-        langfuse_client_kwargs: Optional[Dict[str, Any]] = None,
+        host: str | None = None,
+        langfuse_client_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """
         Initialize the LangfuseConnector component.
@@ -172,7 +173,7 @@ class LangfuseConnector:
         tracing.enable_tracing(self.tracer)
 
     @component.output_types(name=str, trace_url=str, trace_id=str)
-    def run(self, invocation_context: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    def run(self, invocation_context: dict[str, Any] | None = None) -> dict[str, str]:
         """
         Runs the LangfuseConnector component.
 
@@ -191,7 +192,7 @@ class LangfuseConnector:
         )
         return {"name": self.name, "trace_url": self.tracer.get_trace_url(), "trace_id": self.tracer.get_trace_id()}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize this component to a dictionary.
 
@@ -218,7 +219,7 @@ class LangfuseConnector:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LangfuseConnector":
+    def from_dict(cls, data: dict[str, Any]) -> "LangfuseConnector":
         """
         Deserialize this component from a dictionary.
 

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal
 from urllib.parse import quote_plus
 
 import polars as pl
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class SnowflakeTableRetriever:
     """
     Connects to a Snowflake database to execute a SQL query using ADBC and Polars.
+
     Returns the results as a Pandas DataFrame (converted from a Polars DataFrame)
     along with a Markdown-formatted string.
     For more information, see [Polars documentation](https://docs.pola.rs/api/python/dev/reference/api/polars.read_database_uri.html).
@@ -39,7 +40,7 @@ class SnowflakeTableRetriever:
         db_schema="<SCHEMA-NAME>",
         warehouse="<WAREHOUSE-NAME>",
     )
-    executor.warm_up()
+    # Components warm up automatically on first run.
     ```
 
     #### Key-pair Authentication (MFA):
@@ -54,7 +55,7 @@ class SnowflakeTableRetriever:
         db_schema="<SCHEMA-NAME>",
         warehouse="<WAREHOUSE-NAME>",
     )
-    executor.warm_up()
+    # Components warm up automatically on first run.
     ```
 
     #### OAuth Authentication (MFA):
@@ -70,7 +71,7 @@ class SnowflakeTableRetriever:
         db_schema="<SCHEMA-NAME>",
         warehouse="<WAREHOUSE-NAME>",
     )
-    executor.warm_up()
+    # Components warm up automatically on first run.
     ```
 
     #### Running queries:
@@ -102,20 +103,22 @@ class SnowflakeTableRetriever:
         user: str,
         account: str,
         authenticator: Literal["SNOWFLAKE", "SNOWFLAKE_JWT", "OAUTH"] = "SNOWFLAKE",
-        api_key: Optional[Secret] = Secret.from_env_var("SNOWFLAKE_API_KEY", strict=False),  # noqa: B008
-        database: Optional[str] = None,
-        db_schema: Optional[str] = None,
-        warehouse: Optional[str] = None,
-        login_timeout: Optional[int] = 60,
+        api_key: Secret | None = Secret.from_env_var("SNOWFLAKE_API_KEY", strict=False),  # noqa: B008
+        database: str | None = None,
+        db_schema: str | None = None,
+        warehouse: str | None = None,
+        login_timeout: int | None = 60,
         return_markdown: bool = True,
-        private_key_file: Optional[Secret] = Secret.from_env_var("SNOWFLAKE_PRIVATE_KEY_FILE", strict=False),  # noqa: B008
-        private_key_file_pwd: Optional[Secret] = Secret.from_env_var("SNOWFLAKE_PRIVATE_KEY_PWD", strict=False),  # noqa: B008
-        oauth_client_id: Optional[Secret] = Secret.from_env_var("SNOWFLAKE_OAUTH_CLIENT_ID", strict=False),  # noqa: B008
-        oauth_client_secret: Optional[Secret] = Secret.from_env_var("SNOWFLAKE_OAUTH_CLIENT_SECRET", strict=False),  # noqa: B008
-        oauth_token_request_url: Optional[str] = None,
-        oauth_authorization_url: Optional[str] = None,
+        private_key_file: Secret | None = Secret.from_env_var("SNOWFLAKE_PRIVATE_KEY_FILE", strict=False),  # noqa: B008
+        private_key_file_pwd: Secret | None = Secret.from_env_var("SNOWFLAKE_PRIVATE_KEY_PWD", strict=False),  # noqa: B008
+        oauth_client_id: Secret | None = Secret.from_env_var("SNOWFLAKE_OAUTH_CLIENT_ID", strict=False),  # noqa: B008
+        oauth_client_secret: Secret | None = Secret.from_env_var("SNOWFLAKE_OAUTH_CLIENT_SECRET", strict=False),  # noqa: B008
+        oauth_token_request_url: str | None = None,
+        oauth_authorization_url: str | None = None,
     ) -> None:
         """
+        Initialize SnowflakeTableRetriever with connection and authentication parameters.
+
         :param user: User's login.
         :param account: Snowflake account identifier.
         :param authenticator: Authentication method. Required. Options: "SNOWFLAKE" (password),
@@ -153,7 +156,7 @@ class SnowflakeTableRetriever:
         self.oauth_client_secret = oauth_client_secret
         self.oauth_token_request_url = oauth_token_request_url
         self.oauth_authorization_url = oauth_authorization_url
-        self.authenticator_handler: Optional[SnowflakeAuthenticator] = None
+        self.authenticator_handler: SnowflakeAuthenticator | None = None
         self._warmed_up = False
 
     def warm_up(self) -> None:
@@ -180,14 +183,14 @@ class SnowflakeTableRetriever:
 
         self._warmed_up = True
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
         :returns:
             Dictionary with serialized data.
         """
-        data: Dict[str, Any] = {
+        data: dict[str, Any] = {
             "user": self.user,
             "account": self.account,
             "database": self.database,
@@ -207,7 +210,7 @@ class SnowflakeTableRetriever:
         return default_to_dict(self, **data)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SnowflakeTableRetriever":
+    def from_dict(cls, data: dict[str, Any]) -> "SnowflakeTableRetriever":
         """
         Deserializes the component from a dictionary.
 
@@ -316,6 +319,7 @@ class SnowflakeTableRetriever:
     def _polars_to_md(data: pl.DataFrame) -> str:
         """
         Converts a Polars DataFrame to a Markdown-formatted string.
+
         Uses Polars' built-in table formatting for efficient conversion.
 
         :param data: The Polars DataFrame to convert.
@@ -336,9 +340,10 @@ class SnowflakeTableRetriever:
             )
             return ""
 
-    def _execute_query_with_connector(self, query: str) -> Optional[pl.DataFrame]:
+    def _execute_query_with_connector(self, query: str) -> pl.DataFrame | None:
         """
         Executes a query using snowflake-connector-python directly (for JWT authentication).
+
         This bypasses ADBC compatibility issues.
 
         :param query: SQL query to execute.
@@ -346,7 +351,7 @@ class SnowflakeTableRetriever:
         """
         try:
             # Build connection parameters
-            conn_params: Dict[str, Any] = {
+            conn_params: dict[str, Any] = {
                 "user": self.user,
                 "account": self.account,
                 "authenticator": self.authenticator.lower(),
@@ -400,8 +405,9 @@ class SnowflakeTableRetriever:
             return None
 
     @staticmethod
-    def _empty_response() -> Dict[str, Any]:
-        """Returns a standardized empty response.
+    def _empty_response() -> dict[str, DataFrame | str]:
+        """
+        Returns a standardized empty response.
 
         :returns:
             A dictionary with the following keys:
@@ -411,7 +417,7 @@ class SnowflakeTableRetriever:
         return {"dataframe": DataFrame(), "table": ""}
 
     @component.output_types(dataframe=DataFrame, table=str)
-    def run(self, query: str, return_markdown: Optional[bool] = None) -> Dict[str, Any]:
+    def run(self, query: str, return_markdown: bool | None = None) -> dict[str, DataFrame | str]:
         """
         Executes a SQL query against a Snowflake database using ADBC and Polars.
 
@@ -423,8 +429,7 @@ class SnowflakeTableRetriever:
             - `"table"`: A Markdown-formatted string representation of the DataFrame.
         """
         if not self._warmed_up:
-            msg = "SnowflakeTableRetriever not warmed up. Please call `warm_up()` before running queries."
-            raise RuntimeError(msg)
+            self.warm_up()
 
         # Validate SQL query
         if not query:

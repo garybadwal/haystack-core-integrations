@@ -1,4 +1,4 @@
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar
 
 from haystack.dataclasses.sparse_embedding import SparseEmbedding
 from tqdm import tqdm
@@ -12,13 +12,13 @@ class _FastembedEmbeddingBackendFactory:
     Factory class to create instances of fastembed embedding backends.
     """
 
-    _instances: ClassVar[Dict[str, "_FastembedEmbeddingBackend"]] = {}
+    _instances: ClassVar[dict[str, "_FastembedEmbeddingBackend"]] = {}
 
     @staticmethod
     def get_embedding_backend(
         model_name: str,
-        cache_dir: Optional[str] = None,
-        threads: Optional[int] = None,
+        cache_dir: str | None = None,
+        threads: int | None = None,
         local_files_only: bool = False,
     ) -> "_FastembedEmbeddingBackend":
         embedding_backend_id = f"{model_name}{cache_dir}{threads}"
@@ -41,15 +41,15 @@ class _FastembedEmbeddingBackend:
     def __init__(
         self,
         model_name: str,
-        cache_dir: Optional[str] = None,
-        threads: Optional[int] = None,
+        cache_dir: str | None = None,
+        threads: int | None = None,
         local_files_only: bool = False,
-    ):
+    ) -> None:
         self.model = TextEmbedding(
             model_name=model_name, cache_dir=cache_dir, threads=threads, local_files_only=local_files_only
         )
 
-    def embed(self, data: List[str], progress_bar: bool = True, **kwargs: Any) -> List[List[float]]:
+    def embed(self, data: list[str], progress_bar: bool = True, **kwargs: Any) -> list[list[float]]:
         # the embed method returns a Iterable[np.ndarray], so we convert it to a list of lists
         embeddings = []
         embeddings_iterable = self.model.embed(data, **kwargs)
@@ -65,15 +65,15 @@ class _FastembedSparseEmbeddingBackendFactory:
     Factory class to create instances of fastembed sparse embedding backends.
     """
 
-    _instances: ClassVar[Dict[str, "_FastembedSparseEmbeddingBackend"]] = {}
+    _instances: ClassVar[dict[str, "_FastembedSparseEmbeddingBackend"]] = {}
 
     @staticmethod
     def get_embedding_backend(
         model_name: str,
-        cache_dir: Optional[str] = None,
-        threads: Optional[int] = None,
+        cache_dir: str | None = None,
+        threads: int | None = None,
         local_files_only: bool = False,
-        model_kwargs: Optional[Dict[str, Any]] = None,
+        model_kwargs: dict[str, Any] | None = None,
     ) -> "_FastembedSparseEmbeddingBackend":
         embedding_backend_id = f"{model_name}{cache_dir}{threads}{local_files_only}{model_kwargs}"
 
@@ -99,11 +99,11 @@ class _FastembedSparseEmbeddingBackend:
     def __init__(
         self,
         model_name: str,
-        cache_dir: Optional[str] = None,
-        threads: Optional[int] = None,
+        cache_dir: str | None = None,
+        threads: int | None = None,
         local_files_only: bool = False,
-        model_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+        model_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         model_kwargs = model_kwargs or {}
 
         self.model = SparseTextEmbedding(
@@ -114,7 +114,7 @@ class _FastembedSparseEmbeddingBackend:
             **model_kwargs,
         )
 
-    def embed(self, data: List[str], progress_bar: bool = True, **kwargs: Any) -> List[SparseEmbedding]:
+    def embed(self, data: list[str], progress_bar: bool = True, **kwargs: Any) -> list[SparseEmbedding]:
         # The embed method returns a Iterable[SparseEmbedding], so we convert to Haystack SparseEmbedding type.
         # Each SparseEmbedding contains an `indices` key containing a list of int and
         # an `values` key containing a list of floats.

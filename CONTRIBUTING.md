@@ -214,7 +214,8 @@ It's important your tests pass before contributing code. To run all the tests lo
 $ hatch run test:all
 ```
 
-> [!IMPORTANT] The command above will run ALL the tests, including integration tests; some of those often need you to
+> [!IMPORTANT]
+> The command above will run ALL the tests, including integration tests; some of those often need you to
 > run a certain service in background (e.g. a Vector Database) or provide credentials to external services (e.g. OpenAI)
 > in order to pass.
 
@@ -236,30 +237,31 @@ $ hatch run test:integration
 > Core integrations follow the naming convention `PREFIX-haystack`, where `PREFIX` can be the name of the technology
 > you're integrating Haystack with. For example, a deepset integration would be named as `deepset-haystack`.
 
-To create a new integration, from the root of the repo change directory into `integrations`:
+To create a new integration, run the scaffold script from the root of the repository:
 
 ```sh
-cd integrations
+python scripts/create_new_integration.py
 ```
 
-From there, use `hatch` to create the scaffold of the new integration:
+The script will interactively ask you for the integration **name** (e.g. `opensearch`, `amazon_bedrock`) and
+**component type** (e.g. `document_stores`, `generators`, `embedders`). You can also pass these as command-line
+arguments to skip the prompts:
 
 ```sh
-$ hatch --config hatch.toml new -i
-Project name: deepset-haystack
-Description []: An example integration, this text can be edited later
-
-deepset-haystack
-├── src
-│   └── deepset_haystack
-│       ├── __about__.py
-│       └── __init__.py
-├── tests
-│   └── __init__.py
-├── LICENSE.txt
-├── README.md
-└── pyproject.toml
+python scripts/create_new_integration.py --name YOUR_INTEGRATION_NAME --type YOUR_COMPONENT_TYPE
 ```
+
+The script takes care of the full setup in one step:
+
+- Scaffolds the integration folder under `integrations/` with the correct project structure (`pyproject.toml`,
+  source package, tests, pydoc config, example components, and a README).
+- Creates a GitHub Actions CI workflow at `.github/workflows/<name>.yml`.
+- Adds label rules to `.github/labeler.yml`.
+- Registers the new workflow in `.github/workflows/CI_coverage_comment.yml` so PR coverage comments work automatically.
+- Adds the new integration to the table in the root `README.md`.
+
+Once the script finishes, follow the printed next-steps to fill in your component code, add dependencies, and
+write tests.
 
 ### Improving The Documentation
 
@@ -273,17 +275,15 @@ change the code to also change relevant comments and docstrings. This type of do
 developers, but it can be handy for users at times. You can browse it on the dedicated section in the
 [documentation website](https://docs.haystack.deepset.ai/reference/integrations-chroma).
 
-We use `pydoc-markdown` to convert docstrings into properly formatted Markdown files, and while the CI takes care of
-generating and publishing the updated documentation at every merge on the `main` branch, you can generate the docs
+We use [`haystack-pydoc-tools`](https://github.com/deepset-ai/haystack-pydoc-tools) to convert docstrings into properly formatted Markdown files, and while the CI takes care of
+generating and publishing the updated documentation once a new version is released, you can generate the docs
 locally using Hatch. From an integration folder:
 
 ```console
 $ hatch run docs
 ```
 
-If you see a warning referring to a missing `README_API_KEY` env var, that's expected.
-
-If you want to customise the conversion process, the `pydoc-markdown` config files are stored in a `pydoc/` folder
+If you want to customise the conversion process, the `haystack-pydoc-tools` config files are stored in a `pydoc/` folder
 for each integration.
 
 #### Documentation pages

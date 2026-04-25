@@ -1,5 +1,128 @@
 # Changelog
 
+## [integrations/elasticsearch-v6.0.0] - 2026-04-22
+
+### 🚀 Features
+
+- Add support for elasticsearch sparse inference embedding retriever (#3166)
+
+### 🚜 Refactor
+
+- [**breaking**] Elasticsearch - use async mixin tests and fix write/delete behaviour (#3196)
+
+
+## [integrations/elasticsearch-v5.5.0] - 2026-04-13
+
+### 🚀 Features
+
+- Add sparse vector storage to ElasticsearchDocumentStore (#2989)
+- Adds `ElasticsearchSparseEmbeddingRetriever`  or sparse embedding retrieval  (#3104)
+
+
+## [integrations/elasticsearch-v5.4.0] - 2026-04-10
+
+### 🐛 Bug Fixes
+
+- Replace in-place dataclass mutations in document stores (#3114)
+
+### 🚜 Refactor
+
+- Weaviate, chroma, elasticsearch, opensearch, azure_ai_search use `_normalize_metadata_field_name` from haystack.utils (#2953)
+
+### 🧪 Testing
+
+- `ElasticSearchDocumentStore` relying on `Mixin` tests (#2995)
+- Test compatible integrations with python 3.14; update pyproject (#3001)
+- Track test coverage for all integrations (#3065)
+- Better categorize some Document Stores tests (#3085)
+
+### 🧹 Chores
+
+- Enable ANN ruff ruleset for elasticsearch integration (#2986)
+- Enforce ruff docstring rules (D102/D103/D205/D209/D213/D417/D419) in integrations 11-20 (#3009)
+
+### 🌀 Miscellaneous
+
+- ElasticHybridRetriever (#3127)
+
+## [integrations/elasticsearch-v5.3.0] - 2026-03-10
+
+### 🚀 Features
+
+- Add str handling for ElasticsearchDocumentStore api_key (#2934)
+
+### 📚 Documentation
+
+- Simplify pydoc configs (#2855)
+
+### 🧪 Testing
+
+- Replacing each `DocumentStore` specific tests and used the generalised ones from `haystack.testing.document_store` (#2812)
+
+### 🧹 Chores
+
+- Remove unused allow-direct-references (#2866)
+- Standardize author mentions (#2897)
+
+
+## [integrations/elasticsearch-v5.2.0] - 2026-02-02
+
+### 🚀 Features
+
+- Add SQLRetriever to ElasticsearchDocumentStore (#2801)
+
+
+## [integrations/elasticsearch-v5.1.1] - 2026-01-29
+
+### 🐛 Bug Fixes
+
+- Fix bug in deserialization of secrets in ElasticSearchDocumentStore (#2791)
+
+
+## [integrations/elasticsearch-v5.1.0] - 2026-01-20
+
+### 🚀 Features
+
+- Adding new operations to `ElasticSearchDocumentStore` (#2761)
+
+
+## [integrations/elasticsearch-v5.0.0] - 2026-01-13
+
+### 🧹 Chores
+
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Elasticsearch - drop Python 3.9 and use X|Y typing (#2743)
+
+
+## [integrations/elasticsearch-v4.2.0] - 2025-12-19
+
+### 🚀 Features
+
+- Expose refresh parameter in ElasticsearchDocumentStore (#2622)
+
+
+## [integrations/elasticsearch-v4.1.1] - 2025-12-10
+
+### 🚀 Features
+
+- Adding update and delete by filter to `ElasticsearchDocumentStore` (#2582)
+
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+
+### 🌀 Miscellaneous
+
+- Adopt PEP 585 type hinting (part 3) (#2510)
+
 ## [integrations/elasticsearch-v4.1.0] - 2025-10-09
 
 ### 🚀 Features

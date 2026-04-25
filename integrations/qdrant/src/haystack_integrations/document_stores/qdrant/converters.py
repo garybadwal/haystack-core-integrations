@@ -1,5 +1,4 @@
 import uuid
-from typing import List, Union
 
 from haystack import logging
 from haystack.dataclasses import Document
@@ -15,10 +14,11 @@ UUID_NAMESPACE = uuid.UUID("3896d314-1e95-4a3a-b45a-945f9f0b541d")
 
 
 def convert_haystack_documents_to_qdrant_points(
-    documents: List[Document],
+    documents: list[Document],
     *,
     use_sparse_embeddings: bool,
-) -> List[rest.PointStruct]:
+) -> list[rest.PointStruct]:
+    """Convert a list of Haystack Document objects to Qdrant PointStruct objects."""
     points = []
     for document in documents:
         payload = document.to_dict(flatten=False)
@@ -58,10 +58,11 @@ def convert_id(_id: str) -> str:
     return uuid.uuid5(UUID_NAMESPACE, _id).hex
 
 
-QdrantPoint = Union[rest.ScoredPoint, rest.Record]
+QdrantPoint = rest.ScoredPoint | rest.Record
 
 
 def convert_qdrant_point_to_haystack_document(point: QdrantPoint, use_sparse_embeddings: bool) -> Document:
+    """Convert a Qdrant ScoredPoint or Record to a Haystack Document object."""
     payload = point.payload or {}
     payload["score"] = point.score if hasattr(point, "score") else None
 

@@ -1,6 +1,12 @@
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+import asyncio
 import json
+from collections.abc import Iterator
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any
 
 from haystack import component, default_from_dict, default_to_dict, logging
 from haystack.components.generators.utils import _convert_streaming_chunks_to_chat_message
@@ -42,7 +48,7 @@ from llama_cpp.llama_tokenizer import LlamaHFTokenizer
 
 logger = logging.getLogger(__name__)
 
-FINISH_REASON_MAPPING: Dict[str, FinishReason] = {
+FINISH_REASON_MAPPING: dict[str, FinishReason] = {
     "stop": "stop",
     "length": "length",
     "tool_calls": "tool_calls",
@@ -80,6 +86,10 @@ def _convert_message_to_llamacpp_format(message: ChatMessage) -> ChatCompletionR
     if role == "tool" and tool_call_results:
         if tool_call_results[0].origin.id is None:
             msg = "`ToolCall` must have a non-null `id` attribute to be used with llama.cpp."
+            raise ValueError(msg)
+        # handle list of multimodal tool call results
+        if not isinstance(tool_call_results[0].result, str):
+            msg = "ToolCallResult.result must be a string to be used with llama.cpp."
             raise ValueError(msg)
         return {
             "role": "function",
@@ -124,7 +134,7 @@ def _convert_message_to_llamacpp_format(message: ChatMessage) -> ChatCompletionR
             result["content"] = text_contents[0]
 
         if tool_calls:
-            llamacpp_tool_calls: List[ChatCompletionMessageToolCall] = []
+            llamacpp_tool_calls: list[ChatCompletionMessageToolCall] = []
             for tc in tool_calls:
                 if tc.id is None:
                     msg = "`ToolCall` must have a non-null `id` attribute to be used with llama.cpp."
@@ -181,7 +191,6 @@ class LlamaCppChatGenerator:
         model_clip_path="mmproj-model-f16.gguf",  # CLIP model
         n_ctx=4096  # Larger context for image processing
     )
-    generator.warm_up()
 
     result = generator.run(messages)
     print(result)
@@ -191,19 +200,22 @@ class LlamaCppChatGenerator:
     def __init__(
         self,
         model: str,
-        n_ctx: Optional[int] = 0,
-        n_batch: Optional[int] = 512,
-        model_kwargs: Optional[Dict[str, Any]] = None,
-        generation_kwargs: Optional[Dict[str, Any]] = None,
+        n_ctx: int | None = 0,
+        n_batch: int | None = 512,
+        model_kwargs: dict[str, Any] | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
         *,
-        tools: Optional[ToolsType] = None,
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        chat_handler_name: Optional[str] = None,
-        model_clip_path: Optional[str] = None,
-    ):
+        tools: ToolsType | None = None,
+        streaming_callback: StreamingCallbackT | None = None,
+        chat_handler_name: str | None = None,
+        model_clip_path: str | None = None,
+    ) -> None:
         """
+        Initialize LlamaCppChatGenerator.
+
         :param model: The path of a quantized model for text generation, for example, "zephyr-7b-beta.Q4_0.gguf".
             If the model path is also specified in the `model_kwargs`, this parameter will be ignored.
+
         :param n_ctx: The number of tokens in the context. When set to 0, the context will be taken from the model.
         :param n_batch: Prompt processing maximum batch size.
         :param model_kwargs: Dictionary containing keyword arguments used to initialize the LLM for text generation.
@@ -237,7 +249,7 @@ class LlamaCppChatGenerator:
 
         _check_duplicate_tool_names(flatten_tools_or_toolsets(tools))
 
-        handler: Optional[Llava15ChatHandler] = None
+        handler: Llava15ChatHandler | None = None
         # Validate multimodal requirements
         if chat_handler_name is not None:
             if model_clip_path is None:
@@ -255,14 +267,17 @@ class LlamaCppChatGenerator:
         self.n_batch = n_batch
         self.model_kwargs = model_kwargs
         self.generation_kwargs = generation_kwargs
-        self._model: Optional[Llama] = None
+        self._model: Llama | None = None
         self.tools = tools
         self.streaming_callback = streaming_callback
         self.chat_handler_name = chat_handler_name
         self.model_clip_path = model_clip_path
         self._handler = handler
+        # llama-cpp-python is not thread-safe, so async calls must be serialized.
+        self._inference_lock = asyncio.Lock()
 
-    def warm_up(self):
+    def warm_up(self) -> None:
+        """Load and initialize the llama.cpp model."""
         if self._model is not None:
             return
 
@@ -278,7 +293,7 @@ class LlamaCppChatGenerator:
 
         self._model = Llama(**kwargs)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -300,7 +315,7 @@ class LlamaCppChatGenerator:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LlamaCppChatGenerator":
+    def from_dict(cls, data: dict[str, Any]) -> "LlamaCppChatGenerator":
         """
         Deserializes the component from a dictionary.
 
@@ -319,15 +334,15 @@ class LlamaCppChatGenerator:
             )
         return default_from_dict(cls, data)
 
-    @component.output_types(replies=List[ChatMessage])
+    @component.output_types(replies=list[ChatMessage])
     def run(
         self,
-        messages: List[ChatMessage],
-        generation_kwargs: Optional[Dict[str, Any]] = None,
+        messages: list[ChatMessage],
+        generation_kwargs: dict[str, Any] | None = None,
         *,
-        tools: Optional[ToolsType] = None,
-        streaming_callback: Optional[StreamingCallbackT] = None,
-    ) -> Dict[str, List[ChatMessage]]:
+        tools: ToolsType | None = None,
+        streaming_callback: StreamingCallbackT | None = None,
+    ) -> dict[str, list[ChatMessage]]:
         """
         Run the text generation model on the given list of ChatMessages.
 
@@ -346,8 +361,7 @@ class LlamaCppChatGenerator:
             - `replies`: The responses from the model
         """
         if self._model is None:
-            error_msg = "The model has not been loaded. Please call warm_up() before running."
-            raise RuntimeError(error_msg)
+            self.warm_up()
 
         if not messages:
             return {"replies": []}
@@ -359,7 +373,7 @@ class LlamaCppChatGenerator:
         flattened_tools = flatten_tools_or_toolsets(tools)
         _check_duplicate_tool_names(flattened_tools)
 
-        llamacpp_tools: List[ChatCompletionTool] = []
+        llamacpp_tools: list[ChatCompletionTool] = []
         if flattened_tools:
             for t in flattened_tools:
                 llamacpp_tools.append(
@@ -380,7 +394,7 @@ class LlamaCppChatGenerator:
         )
 
         if streaming_callback:
-            response_stream = self._model.create_chat_completion(
+            response_stream = self._model.create_chat_completion(  # type: ignore[union-attr]
                 messages=formatted_messages, tools=llamacpp_tools, **updated_generation_kwargs, stream=True
             )
             return self._handle_streaming_response(
@@ -390,7 +404,7 @@ class LlamaCppChatGenerator:
             )  # we know that response_stream is Iterator[CreateChatCompletionStreamResponse]
             # because create_chat_completion was called with stream=True, but mypy doesn't know that
 
-        response = self._model.create_chat_completion(
+        response = self._model.create_chat_completion(  # type: ignore[union-attr]
             messages=formatted_messages, tools=llamacpp_tools, **updated_generation_kwargs
         )
         replies = []
@@ -398,19 +412,61 @@ class LlamaCppChatGenerator:
             msg = f"Expected a dictionary response, got a different object: {response}"
             raise ValueError(msg)
 
-        for choice in response["choices"]:
-            chat_message = self._convert_chat_completion_choice_to_chat_message(choice, response)
+        for choice in response["choices"]:  # type: ignore[index]
+            chat_message = self._convert_chat_completion_choice_to_chat_message(
+                choice,
+                response,  # type: ignore[arg-type]
+            )
             replies.append(chat_message)
         return {"replies": replies}
+
+    @component.output_types(replies=list[ChatMessage])
+    async def run_async(
+        self,
+        messages: list[ChatMessage],
+        generation_kwargs: dict[str, Any] | None = None,
+        *,
+        tools: ToolsType | None = None,
+        streaming_callback: StreamingCallbackT | None = None,
+    ) -> dict[str, list[ChatMessage]]:
+        """
+        Async version of run. Runs the text generation model on the given list of ChatMessages.
+
+        Uses a thread pool to avoid blocking the event loop, since llama-cpp-python provides
+        only synchronous inference.
+
+        :param messages:
+            A list of ChatMessage instances representing the input messages.
+        :param generation_kwargs:  A dictionary containing keyword arguments to customize text generation.
+            For more information on the available kwargs, see
+            [llama.cpp documentation](https://llama-cpp-python.readthedocs.io/en/latest/api-reference/#llama_cpp.Llama.create_chat_completion).
+        :param tools:
+            A list of Tool and/or Toolset objects, or a single Toolset for which the model can prepare calls.
+            Each tool should have a unique name. If set, it will override the `tools` parameter set during
+            component initialization.
+        :param streaming_callback: A callback function that is called when a new token is received from the stream.
+            If set, it will override the `streaming_callback` parameter set during component initialization.
+        :returns: A dictionary with the following keys:
+            - `replies`: The responses from the model
+        """
+        async with self._inference_lock:
+            return await asyncio.to_thread(
+                self.run,
+                messages=messages,
+                generation_kwargs=generation_kwargs,
+                tools=tools,
+                streaming_callback=streaming_callback,
+            )
 
     @staticmethod
     def _handle_streaming_response(
         response_stream: Iterator[CreateChatCompletionStreamResponse],
         streaming_callback: SyncStreamingCallbackT,
         component_info: ComponentInfo,
-    ) -> Dict[str, List[ChatMessage]]:
+    ) -> dict[str, list[ChatMessage]]:
         """
         Take streaming responses from llama.cpp, convert to Haystack StreamingChunk objects, stream them,
+
         and finally convert them to a ChatMessage.
 
         :param response_stream: The streaming responses from llama.cpp.
@@ -434,8 +490,8 @@ class LlamaCppChatGenerator:
 
             if chunk.get("choices") and len(chunk["choices"]) > 0:
                 choice = chunk["choices"][0]
-                delta: Union[ChatCompletionStreamResponseDelta, ChatCompletionStreamResponseDeltaEmpty, Dict] = (
-                    choice.get("delta", {})
+                delta: ChatCompletionStreamResponseDelta | ChatCompletionStreamResponseDeltaEmpty | dict = choice.get(
+                    "delta", {}
                 )
 
                 finish_reason = choice.get("finish_reason")

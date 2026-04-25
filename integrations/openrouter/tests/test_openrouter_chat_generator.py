@@ -79,7 +79,7 @@ def mock_chat_completion():
     with patch("openai.resources.chat.completions.Completions.create") as mock_chat_completion_create:
         completion = ChatCompletion(
             id="foo",
-            model="openai/gpt-4o-mini",
+            model="openai/gpt-5-mini",
             object="chat.completion",
             choices=[
                 Choice(
@@ -102,7 +102,7 @@ class TestOpenRouterChatGenerator:
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-api-key")
         component = OpenRouterChatGenerator()
         assert component.client.api_key == "test-api-key"
-        assert component.model == "openai/gpt-4o-mini"
+        assert component.model == "openai/gpt-5-mini"
         assert component.api_base_url == "https://openrouter.ai/api/v1"
         assert component.streaming_callback is None
         assert not component.generation_kwargs
@@ -115,13 +115,13 @@ class TestOpenRouterChatGenerator:
     def test_init_with_parameters(self):
         component = OpenRouterChatGenerator(
             api_key=Secret.from_token("test-api-key"),
-            model="openai/gpt-4o-mini",
+            model="openai/gpt-5",
             streaming_callback=print_streaming_chunk,
             api_base_url="test-base-url",
             generation_kwargs={"max_tokens": 10, "some_test_param": "test-params"},
         )
         assert component.client.api_key == "test-api-key"
-        assert component.model == "openai/gpt-4o-mini"
+        assert component.model == "openai/gpt-5"
         assert component.streaming_callback is print_streaming_chunk
         assert component.generation_kwargs == {"max_tokens": 10, "some_test_param": "test-params"}
 
@@ -137,7 +137,7 @@ class TestOpenRouterChatGenerator:
 
         expected_params = {
             "api_key": {"env_vars": ["OPENROUTER_API_KEY"], "strict": True, "type": "env_var"},
-            "model": "openai/gpt-4o-mini",
+            "model": "openai/gpt-5-mini",
             "streaming_callback": None,
             "api_base_url": "https://openrouter.ai/api/v1",
             "generation_kwargs": {},
@@ -155,7 +155,7 @@ class TestOpenRouterChatGenerator:
         monkeypatch.setenv("ENV_VAR", "test-api-key")
         component = OpenRouterChatGenerator(
             api_key=Secret.from_env_var("ENV_VAR"),
-            model="openai/gpt-4o-mini",
+            model="openai/gpt-5",
             streaming_callback=print_streaming_chunk,
             api_base_url="test-base-url",
             generation_kwargs={"max_tokens": 10, "some_test_param": "test-params"},
@@ -174,7 +174,7 @@ class TestOpenRouterChatGenerator:
 
         expected_params = {
             "api_key": {"env_vars": ["ENV_VAR"], "strict": True, "type": "env_var"},
-            "model": "openai/gpt-4o-mini",
+            "model": "openai/gpt-5",
             "api_base_url": "test-base-url",
             "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
             "generation_kwargs": {"max_tokens": 10, "some_test_param": "test-params"},
@@ -196,7 +196,7 @@ class TestOpenRouterChatGenerator:
             ),
             "init_parameters": {
                 "api_key": {"env_vars": ["OPENROUTER_API_KEY"], "strict": True, "type": "env_var"},
-                "model": "openai/gpt-4o-mini",
+                "model": "openai/gpt-5-mini",
                 "api_base_url": "test-base-url",
                 "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
                 "generation_kwargs": {"max_tokens": 10, "some_test_param": "test-params"},
@@ -208,7 +208,7 @@ class TestOpenRouterChatGenerator:
             },
         }
         component = OpenRouterChatGenerator.from_dict(data)
-        assert component.model == "openai/gpt-4o-mini"
+        assert component.model == "openai/gpt-5-mini"
         assert component.streaming_callback is print_streaming_chunk
         assert component.api_base_url == "test-base-url"
         assert component.generation_kwargs == {"max_tokens": 10, "some_test_param": "test-params"}
@@ -227,7 +227,7 @@ class TestOpenRouterChatGenerator:
             ),
             "init_parameters": {
                 "api_key": {"env_vars": ["OPENROUTER_API_KEY"], "strict": True, "type": "env_var"},
-                "model": "openai/gpt-4o-mini",
+                "model": "openai/gpt-5-mini",
                 "api_base_url": "test-base-url",
                 "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
                 "generation_kwargs": {"max_tokens": 10, "some_test_param": "test-params"},
@@ -268,6 +268,33 @@ class TestOpenRouterChatGenerator:
         assert len(response["replies"]) == 1
         assert [isinstance(reply, ChatMessage) for reply in response["replies"]]
 
+    def test_prepare_api_call_with_tools_strict(self, chat_messages, tools, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-api-key")
+        component = OpenRouterChatGenerator(tools=tools)
+        api_args = component._prepare_api_call(messages=chat_messages, tools_strict=True)
+
+        assert api_args["tools"][0]["type"] == "function"
+        function_spec = api_args["tools"][0]["function"]
+        assert function_spec["name"] == "weather"
+        assert function_spec["strict"] is True
+        assert function_spec["parameters"]["additionalProperties"] is False
+
+    def test_prepare_api_call_raises_when_streaming_with_multiple_responses(self, chat_messages, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-api-key")
+        component = OpenRouterChatGenerator(generation_kwargs={"n": 2})
+        with pytest.raises(ValueError, match="Cannot stream multiple responses"):
+            component._prepare_api_call(messages=chat_messages, streaming_callback=print_streaming_chunk)
+
+    def test_prepare_api_call_with_response_format_and_streaming(self, chat_messages, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-api-key")
+        response_format = {"type": "json_schema", "json_schema": {"name": "Foo", "schema": {"type": "object"}}}
+        component = OpenRouterChatGenerator(generation_kwargs={"response_format": response_format})
+        api_args = component._prepare_api_call(messages=chat_messages, streaming_callback=print_streaming_chunk)
+
+        assert api_args["stream"] is True
+        assert api_args["openai_endpoint"] == "create"
+        assert api_args["response_format"] == response_format
+
     @pytest.mark.skipif(
         not os.environ.get("OPENROUTER_API_KEY", None),
         reason="Export an env var called OPENROUTER_API_KEY containing the OpenRouter API key to run this test.",
@@ -280,7 +307,7 @@ class TestOpenRouterChatGenerator:
         assert len(results["replies"]) == 1
         message: ChatMessage = results["replies"][0]
         assert "Paris" in message.text
-        assert "openai/gpt-4o-mini" in message.meta["model"]
+        assert "openai/gpt-5-mini" in message.meta["model"]
         assert message.meta["finish_reason"] == "stop"
 
     @pytest.mark.skipif(
@@ -316,7 +343,7 @@ class TestOpenRouterChatGenerator:
         message: ChatMessage = results["replies"][0]
         assert "Paris" in message.text
 
-        assert "openai/gpt-4o-mini" in message.meta["model"]
+        assert "openai/gpt-5-mini" in message.meta["model"]
         assert message.meta["finish_reason"] == "stop"
 
         assert callback.counter > 1
@@ -333,13 +360,13 @@ class TestOpenRouterChatGenerator:
         results = component.run(chat_messages)
         assert len(results["replies"]) == 1
         message = results["replies"][0]
-        assert message.text == ""
+        assert not message.text
 
         assert message.tool_calls
         tool_call = message.tool_call
         assert isinstance(tool_call, ToolCall)
         assert tool_call.tool_name == "weather"
-        assert tool_call.arguments == {"city": "Paris"}
+        assert "paris" in tool_call.arguments["city"].lower(), f"Expected 'paris' in city: {tool_call.arguments}"
         assert message.meta["finish_reason"] == "tool_calls"
 
     @pytest.mark.skipif(
@@ -371,7 +398,12 @@ class TestOpenRouterChatGenerator:
             assert tool_call.tool_name == "weather"
 
         arguments = [tool_call.arguments for tool_call in tool_calls]
-        assert sorted(arguments, key=lambda x: x["city"]) == [{"city": "Berlin"}, {"city": "Paris"}]
+        # Extract city names and check they contain the expected cities
+        # (LLM may return "Paris, France" or "Berlin, Germany" instead of just city names)
+        cities = [arg["city"].lower() for arg in arguments]
+        assert len(cities) == 2
+        assert any("berlin" in city for city in cities), f"Expected 'berlin' in one of {cities}"
+        assert any("paris" in city for city in cities), f"Expected 'paris' in one of {cities}"
         assert tool_message.meta["finish_reason"] == "tool_calls"
 
         new_messages = [
@@ -421,7 +453,12 @@ class TestOpenRouterChatGenerator:
             assert tool_call.tool_name == "weather"
 
         arguments = [tool_call.arguments for tool_call in tool_calls]
-        assert sorted(arguments, key=lambda x: x["city"]) == [{"city": "Berlin"}, {"city": "Paris"}]
+        # Extract city names and check they contain the expected cities
+        # (LLM may return "Paris, France" or "Berlin, Germany" instead of just city names)
+        cities = [arg["city"].lower() for arg in arguments]
+        assert len(cities) == 2
+        assert any("berlin" in city for city in cities), f"Expected 'berlin' in one of {cities}"
+        assert any("paris" in city for city in cities), f"Expected 'paris' in one of {cities}"
         assert tool_message.meta["finish_reason"] == "tool_calls"
 
     @pytest.mark.skipif(
@@ -448,10 +485,9 @@ class TestOpenRouterChatGenerator:
             }
         )
 
-        assert (
-            "The weather in Paris is sunny and 32°C"
-            == results["tool_invoker"]["tool_messages"][0].tool_call_result.result
-        )
+        result = results["tool_invoker"]["tool_messages"][0].tool_call_result.result
+        assert "paris" in result.lower(), f"Expected 'paris' in result: {result}"
+        assert "sunny and 32°c" in result.lower(), f"Expected 'sunny and 32°c' in result: {result}"
 
     @pytest.mark.skipif(
         not os.environ.get("OPENROUTER_API_KEY", None),
@@ -477,15 +513,35 @@ class TestOpenRouterChatGenerator:
             },
         }
 
-        chat_messages = [ChatMessage.from_user("What's the capital of France?")]
-        comp = OpenRouterChatGenerator(generation_kwargs={"response_format": response_schema})
+        # Use a more explicit prompt that emphasizes JSON structure requirement
+        # gpt-5-mini is very rarely flaky but to harden CI we'll be more explicit
+        chat_messages = [
+            ChatMessage.from_user(
+                "What's the capital of France? "
+                "You must respond with a JSON object containing 'city' and 'country' fields."
+            )
+        ]
+        comp = OpenRouterChatGenerator(
+            model="openai/gpt-5-mini", generation_kwargs={"response_format": response_schema}
+        )
         results = comp.run(chat_messages)
         assert len(results["replies"]) == 1
         message: ChatMessage = results["replies"][0]
-        msg = json.loads(message.text)
-        assert "Paris" in msg["city"]
-        assert isinstance(msg["country"], str)
-        assert "France" in msg["country"]
+        try:
+            msg = json.loads(message.text)
+        except json.JSONDecodeError as e:
+            pytest.fail(
+                f"Failed to parse response as JSON. "
+                f"Expected JSON with 'city' and 'country' fields, but got: {message.text!r}. "
+                f"Error: {e}"
+            )
+
+        # Validate JSON structure with descriptive error messages
+        assert "city" in msg, f"Response JSON missing 'city' field. Got: {msg}"
+        assert "country" in msg, f"Response JSON missing 'country' field. Got: {msg}"
+        assert "paris" in msg["city"].lower(), f"Expected 'Paris' in city field, got: {msg['city']}"
+        assert isinstance(msg["country"], str), f"Expected country to be string, got: {type(msg['country'])}"
+        assert "france" in msg["country"].lower(), f"Expected 'France' in country field, got: {msg['country']}"
         assert message.meta["finish_reason"] == "stop"
 
     def test_serde_in_pipeline(self, monkeypatch):
@@ -506,7 +562,6 @@ class TestOpenRouterChatGenerator:
 
         # Create generator with specific configuration
         generator = OpenRouterChatGenerator(
-            model="openai/gpt-4o-mini",
             generation_kwargs={"temperature": 0.7},
             streaming_callback=print_streaming_chunk,
             tools=[tool],
@@ -527,7 +582,7 @@ class TestOpenRouterChatGenerator:
                     "type": "haystack_integrations.components.generators.openrouter.chat.chat_generator.OpenRouterChatGenerator",  # noqa: E501
                     "init_parameters": {
                         "api_key": {"type": "env_var", "env_vars": ["OPENROUTER_API_KEY"], "strict": True},
-                        "model": "openai/gpt-4o-mini",
+                        "model": "openai/gpt-5-mini",
                         "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
                         "api_base_url": "https://openrouter.ai/api/v1",
                         "generation_kwargs": {"temperature": 0.7},
@@ -593,17 +648,42 @@ class TestOpenRouterChatGenerator:
     )
     @pytest.mark.integration
     def test_live_run_with_response_format_pydantic_model(self, calendar_event_model):
+        # Use a more explicit prompt that emphasizes JSON structure requirement
         chat_messages = [
-            ChatMessage.from_user("The marketing summit takes place on October12th at the Hilton Hotel downtown.")
+            ChatMessage.from_user(
+                "The marketing summit takes place on October12th at the Hilton Hotel downtown. "
+                "Extract the event information and respond with a JSON object containing "
+                "'event_name', 'event_date', and 'event_location' fields."
+            )
         ]
-        component = OpenRouterChatGenerator(generation_kwargs={"response_format": calendar_event_model})
+        component = OpenRouterChatGenerator(
+            model="openai/gpt-5-mini", generation_kwargs={"response_format": calendar_event_model}
+        )
         results = component.run(chat_messages)
         assert len(results["replies"]) == 1
         message: ChatMessage = results["replies"][0]
-        msg = json.loads(message.text)
-        assert "Marketing Summit" in msg["event_name"]
-        assert isinstance(msg["event_date"], str)
-        assert isinstance(msg["event_location"], str)
+
+        # Add better error message if JSON parsing fails
+        try:
+            msg = json.loads(message.text)
+        except json.JSONDecodeError as e:
+            pytest.fail(
+                f"Failed to parse response as JSON. "
+                f"Expected JSON with 'event_name', 'event_date', and 'event_location' fields, "
+                f"but got: {message.text!r}. Error: {e}"
+            )
+
+        # Validate JSON structure with descriptive error messages
+        assert "event_name" in msg, f"Response JSON missing 'event_name' field. Got: {msg}"
+        assert "event_date" in msg, f"Response JSON missing 'event_date' field. Got: {msg}"
+        assert "event_location" in msg, f"Response JSON missing 'event_location' field. Got: {msg}"
+        assert "marketing summit" in msg["event_name"].lower(), (
+            f"Expected 'Marketing Summit' in event_name, got: {msg['event_name']}"
+        )
+        assert isinstance(msg["event_date"], str), f"Expected event_date to be string, got: {type(msg['event_date'])}"
+        assert isinstance(msg["event_location"], str), (
+            f"Expected event_location to be string, got: {type(msg['event_location'])}"
+        )
 
     @pytest.mark.skipif(
         not os.environ.get("OPENROUTER_API_KEY", None),
@@ -655,7 +735,7 @@ class TestOpenRouterChatGenerator:
 
         # Pass mixed list: echo_tool (individual) and toolset (weather + time) at runtime
         # This tests that both individual tools and toolsets can be combined
-        messages = [ChatMessage.from_user("Echo this: Hello World")]
+        messages = [ChatMessage.from_user("Echo this via tool: Hello World")]
         results = component.run(messages, tools=[echo_tool, toolset])
 
         assert len(results["replies"]) == 1
@@ -677,7 +757,7 @@ class TestChatCompletionChunkConversion:
                     ChoiceChunk(delta=ChoiceDelta(content="", role="assistant"), index=0, native_finish_reason=None)
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -702,7 +782,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -726,7 +806,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -750,7 +830,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -774,7 +854,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -798,7 +878,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -823,7 +903,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 service_tier=None,
                 system_fingerprint="fp_34a54ae93c",
@@ -850,7 +930,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -874,7 +954,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -898,7 +978,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -922,7 +1002,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -938,7 +1018,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 system_fingerprint="fp_34a54ae93c",
                 provider="OpenAI",
@@ -953,7 +1033,7 @@ class TestChatCompletionChunkConversion:
                     )
                 ],
                 created=1750162525,
-                model="openai/gpt-4o-mini",
+                model="openai/gpt-5-mini",
                 object="chat.completion.chunk",
                 usage=CompletionUsage(
                     completion_tokens=42,
@@ -983,7 +1063,7 @@ class TestChatCompletionChunkConversion:
         assert result.tool_calls[1].arguments == {"city": "Berlin"}
 
         # Verify meta information
-        assert result.meta["model"] == "openai/gpt-4o-mini"
+        assert result.meta["model"] == "openai/gpt-5-mini"
         assert result.meta["finish_reason"] == "tool_calls"
         assert result.meta["index"] == 0
         assert result.meta["completion_start_time"] is not None

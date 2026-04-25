@@ -1,5 +1,97 @@
 # Changelog
 
+## [integrations/cohere-v9.1.0] - 2026-04-13
+
+### 🚀 Features
+
+- *(cohere)* Add async support to CohereRanker (#3143)
+
+
+## [integrations/cohere-v9.0.0] - 2026-04-07
+
+### 🐛 Bug Fixes
+
+- [**breaking**] Cohere Embedders - set embed-v4.0 as the default model (#3111)
+
+### 🧪 Testing
+
+- Test compatible integrations with python 3.14; update pyproject (#3001)
+- Track test coverage for all integrations (#3065)
+
+### 🧹 Chores
+
+- Enforce ruff docstring rules (D102/D103/D205/D209/D213/D417/D419) in first 10 integrations (#3008)
+
+
+## [integrations/cohere-v8.1.0] - 2026-03-19
+
+### 🚀 Features
+
+- Add list of models supported by Cohere components (#2993)
+
+### 🧹 Chores
+
+- Enable ANN ruff ruleset for cohere integration (#2983)
+
+
+## [integrations/cohere-v8.0.1] - 2026-03-17
+
+### 🐛 Bug Fixes
+
+- Fix the conversion of cohere chunks to Haystack streaming chunks (#2968)
+
+
+## [integrations/cohere-v8.0.0] - 2026-03-11
+
+### 🚀 Features
+
+- *(cohere)* Add timeout and max_retries to chat generator (#2873)
+
+### 📚 Documentation
+
+- Simplify pydoc configs (#2855)
+
+### 🧹 Chores
+
+- [**breaking**] CohereChatGenerator - remove `**kwargs` init parameter + fix test (#2948)
+
+
+## [integrations/cohere-v7.0.2] - 2026-02-12
+
+### 🐛 Bug Fixes
+
+- Cohere - use dictionaries for Chat Message representation (#2832)
+
+## [integrations/cohere-v7.0.1] - 2026-01-16
+
+### 🐛 Bug Fixes
+
+- *(cohere)* Use dataclass replace to avoid modifying input documents (#2755)
+
+
+## [integrations/cohere-v7.0.0] - 2026-01-12
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Cohere - drop Python 3.9 and use X|Y typing (#2696)
+
+
+## [integrations/cohere-v6.3.0] - 2025-11-26
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Update CohereChatGenerator default model to command-a-03-2025 (#2553)
+
+### 🌀 Miscellaneous
+
+- Adopt PEP 585 type hinting (part 2) (#2508)
+
 ## [integrations/cohere-v6.1.0] - 2025-10-22
 
 ### 🚀 Features

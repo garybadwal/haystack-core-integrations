@@ -1,11 +1,98 @@
 # Changelog
 
-## [integrations/anthropic-v4.5.1]
+## [integrations/anthropic-v5.7.0] - 2026-03-13
+
+### 🌀 Miscellaneous
+
+- Feat: List supported models for `AnthropicChatGenerator` (#2958)
+
+## [integrations/anthropic-v5.6.1] - 2026-03-12
 
 ### 🧹 Chores
 
-- Adopt PEP 585 type hinting
+- AnthropicVertexChatGenerator - add SUPPORTED_MODELS docstring (#2954)
 
+
+## [integrations/anthropic-v5.6.0] - 2026-03-11
+
+### 🚀 Features
+
+- *(anthropic)* Add SUPPORTED_MODELS to AnthropicVertexChatGenerator (#2932)
+
+
+## [integrations/anthropic-v5.5.0] - 2026-03-09
+
+### 🚀 Features
+
+- *(anthropic)* Allow output_config in AnthropicChatGenerator generation kwargs (#2931)
+
+
+## [integrations/anthropic-v5.4.0] - 2026-02-24
+
+### 🚀 Features
+
+- Anthropic - support `FileContent` (#2867)
+
+### 📚 Documentation
+
+- Simplify pydoc configs (#2855)
+
+### 🧪 Testing
+
+- Remove redacted thinking test due Claude 3.7 Sonnet retirement (#2863)
+
+
+## [integrations/anthropic-v5.3.0] - 2026-02-18
+
+### 🚀 Features
+
+- Use StreamingChunk.reasoning field for Anthropic thinking content (#2849)
+
+
+## [integrations/anthropic-v5.2.0] - 2026-01-27
+
+### 🚀 Features
+
+- Anthropic - support images in tool results (#2769)
+
+
+## [integrations/anthropic-v5.1.1] - 2026-01-15
+
+### 🐛 Bug Fixes
+
+- None value handling of flattened generation kwargs for AnthropicChatGenerator (#2753)
+
+
+## [integrations/anthropic-v5.1.0] - 2026-01-13
+
+### 🚀 Features
+
+- Support flattened generation_kwargs with AnthropicChatGenerator (#2740)
+
+
+## [integrations/anthropic-v5.0.0] - 2026-01-09
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Anthropic - drop Python 3.9 and use X|Y typing (#2688)
+
+
+## [integrations/anthropic-v4.6.0] - 2025-11-26
+
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Update anthropic default model (#2551)
+
+### 🌀 Miscellaneous
+
+- Adopt PEP 585 type hinting (part 1) (#2509)
 
 ## [integrations/anthropic-v4.5.0] - 2025-10-22
 

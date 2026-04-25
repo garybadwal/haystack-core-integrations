@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict
+from typing import Any
 
 from dateutil import parser
 from haystack.errors import FilterError
@@ -11,9 +11,28 @@ import weaviate
 from weaviate.collections.classes.filters import Filter, FilterReturn
 
 
-def convert_filters(filters: Dict[str, Any]) -> FilterReturn:
+def validate_filters(filters: dict[str, Any] | None) -> None:
+    """
+    Validates that filters have the correct structure.
+
+    :param filters: The filters to validate.
+    :raises ValueError: If filters are provided but have invalid syntax.
+    """
+    if filters and "operator" not in filters and "conditions" not in filters:
+        msg = "Invalid filter syntax. See https://docs.haystack.deepset.ai/docs/metadata-filtering for details."
+        raise ValueError(msg)
+
+
+def convert_filters(filters: dict[str, Any]) -> FilterReturn:
     """
     Convert filters from Haystack format to Weaviate format.
+
+    Supported comparison operators: ``==``, ``!=``, ``>``, ``>=``, ``<``, ``<=``,
+    ``in``, ``not in``, ``contains``.
+
+    Note: The ``contains`` operator performs substring matching and is
+    **case-sensitive**. For case-insensitive matching, normalize the value
+    (e.g., lowercase) before building the filter.
     """
     if not isinstance(filters, dict):
         msg = "Filters must be a dictionary"
@@ -39,9 +58,10 @@ OPERATOR_INVERSE = {
 }
 
 
-def _invert_condition(filters: Dict[str, Any]) -> Dict[str, Any]:
+def _invert_condition(filters: dict[str, Any]) -> dict[str, Any]:
     """
     Invert condition recursively.
+
     Weaviate doesn't support NOT filters so we need to invert them ourselves.
     """
     inverted_condition = filters.copy()
@@ -63,7 +83,7 @@ LOGICAL_OPERATORS = {
 }
 
 
-def _parse_logical_condition(condition: Dict[str, Any]) -> FilterReturn:
+def _parse_logical_condition(condition: dict[str, Any]) -> FilterReturn:
     if "operator" not in condition:
         msg = f"'operator' key missing in {condition}"
         raise FilterError(msg)
@@ -216,6 +236,19 @@ def _not_in(field: str, value: Any) -> FilterReturn:
     return Filter.all_of(operands)
 
 
+def _contains(field: str, value: Any) -> FilterReturn:
+    """
+    Creates a filter for substring matching using Weaviate's 'like' operator.
+
+    The matching is case-sensitive. For case-insensitive matching, consider
+    normalizing the value before passing it to this function.
+    """
+    if not isinstance(value, str):
+        msg = "Filter value must be a string when using 'contains' comparator"
+        raise FilterError(msg)
+    return weaviate.classes.query.Filter.by_property(field).like(f"*{value}*")
+
+
 COMPARISON_OPERATORS = {
     "==": _equal,
     "!=": _not_equal,
@@ -225,10 +258,11 @@ COMPARISON_OPERATORS = {
     "<=": _less_than_equal,
     "in": _in,
     "not in": _not_in,
+    "contains": _contains,
 }
 
 
-def _parse_comparison_condition(condition: Dict[str, Any]) -> FilterReturn:
+def _parse_comparison_condition(condition: dict[str, Any]) -> FilterReturn:
     field: str = condition["field"]
 
     if field.startswith("meta."):
@@ -253,8 +287,9 @@ def _parse_comparison_condition(condition: Dict[str, Any]) -> FilterReturn:
 
 def _match_no_document(field: str) -> FilterReturn:
     """
-    Returns a filters that will match no Document, this is used to keep the behavior consistent
-    between different Document Stores.
+    Returns a filter that will match no Document.
+
+    This is used to keep the behavior consistent between different Document Stores.
     """
 
     operands = [weaviate.classes.query.Filter.by_property(field).is_none(val) for val in [False, True]]

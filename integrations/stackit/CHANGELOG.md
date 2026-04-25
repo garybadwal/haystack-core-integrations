@@ -1,5 +1,52 @@
 # Changelog
 
+## [integrations/stackit-v2.1.0] - 2026-03-16
+
+### 🚀 Features
+
+- Add list of supported models for StackIT components (#2962)
+
+### 📚 Documentation
+
+- Simplify pydoc configs (#2855)
+
+### 🧪 Testing
+
+- Stackit - make integration tests more robust (#2882)
+
+
+## [integrations/stackit-v2.0.0] - 2026-01-13
+
+
+### 🧹 Chores
+
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Stackit - drop Python 3.9 and use X|Y typing (#2730)
+
+## [integrations/stackit-v1.3.0] - 2025-11-27
+
+### 🚀 Features
+
+- Support structured outputs in `STACKITChatGenerator` (#2536)
+
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Standardize readmes - part 2 (#2205)
+- Remove Readme API CI workflow and configs (#2573)
+
+### 🌀 Miscellaneous
+
+- Chore: Fix linting in tests for stackit integration (#2260)
+- Enhancement: Adopt PEP 585 type hinting (part 5) (#2528)
+
 ## [integrations/stackit-v1.2.0] - 2025-06-30
 
 ### 🧹 Chores

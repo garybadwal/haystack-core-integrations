@@ -46,8 +46,8 @@ installer = "uv"
 dependencies = ["haystack-pydoc-tools", "ruff"]
 
 [tool.hatch.envs.default.scripts]
-docs = ["pydoc-markdown pydoc/config.yml"]
-fmt = "ruff check --fix {args} && ruff format {args}"
+docs = ["haystack-pydoc pydoc/config_docusaurus.yml"]
+fmt = "ruff check --fix {args}; ruff format {args}"
 fmt-check = "ruff check {args} && ruff format --check {args}"
 
 [tool.hatch.envs.test]
@@ -81,7 +81,7 @@ typing = "mypy --install-types --non-interactive --explicit-package-bases {args:
 
 
 [tool.ruff]
-target-version = "py38"
+target-version = "py39"
 line-length = 120
 
 [tool.ruff.lint]

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any, ClassVar, Optional, Union
+from typing import Any, ClassVar
 
 from haystack import component, default_from_dict, default_to_dict, logging
 from haystack.components.generators.utils import _convert_streaming_chunks_to_chat_message
@@ -64,7 +64,6 @@ class AnthropicChatGenerator:
     from haystack.dataclasses import ChatMessage
 
     generator = AnthropicChatGenerator(
-        model="claude-sonnet-4-20250514",
         generation_kwargs={
             "max_tokens": 1000,
             "temperature": 0.7,
@@ -108,20 +107,35 @@ class AnthropicChatGenerator:
         "top_k",
         "extra_headers",
         "thinking",
+        "output_config",
     ]
+
+    SUPPORTED_MODELS: ClassVar[list[str]] = [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-4-5-20250929",
+        "claude-opus-4-5-20251101",
+        "claude-opus-4-1-20250805",
+        "claude-sonnet-4-20250514",
+        "claude-opus-4-20250514",
+        "claude-3-haiku-20240307",
+    ]
+    """A non-exhaustive list of chat models supported by this component. See
+     https://platform.claude.com/docs/en/about-claude/models/overview for the full list."""
 
     def __init__(
         self,
         api_key: Secret = Secret.from_env_var("ANTHROPIC_API_KEY"),  # noqa: B008
-        model: str = "claude-sonnet-4-20250514",
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        generation_kwargs: Optional[dict[str, Any]] = None,
+        model: str = "claude-sonnet-4-5",
+        streaming_callback: StreamingCallbackT | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
         ignore_tools_thinking_messages: bool = True,
-        tools: Optional[ToolsType] = None,
+        tools: ToolsType | None = None,
         *,
-        timeout: Optional[float] = None,
-        max_retries: Optional[int] = None,
-    ):
+        timeout: float | None = None,
+        max_retries: int | None = None,
+    ) -> None:
         """
         Creates an instance of AnthropicChatGenerator.
 
@@ -145,6 +159,7 @@ class AnthropicChatGenerator:
             - `thinking`: A dictionary of thinking parameters to be passed to the model.
                 The `budget_tokens` passed for thinking should be less than `max_tokens`.
                 For more details and supported models, see: [Anthropic Extended Thinking](https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking)
+            - `output_config`: A dictionary of output configuration options to be passed to the model.
 
         :param ignore_tools_thinking_messages: Anthropic's approach to tools (function calling) resolution involves a
             "chain of thought" messages before returning the actual function names and parameters in a message. If
@@ -230,8 +245,8 @@ class AnthropicChatGenerator:
     def _prepare_request_params(
         self,
         messages: list[ChatMessage],
-        generation_kwargs: Optional[dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
     ) -> tuple[list[TextBlockParam], list[MessageParam], dict[str, Any], list[ToolParam]]:
         """
         Prepare the parameters for the Anthropic API request.
@@ -248,6 +263,8 @@ class AnthropicChatGenerator:
         """
         # update generation kwargs by merging with the generation kwargs passed to the run method
         generation_kwargs = {**self.generation_kwargs, **(generation_kwargs or {})}
+        generation_kwargs = self._resolve_flattened_generation_kwargs(generation_kwargs)
+
         disallowed_params = set(generation_kwargs) - set(self.ALLOWED_PARAMS)
         if disallowed_params:
             logger.warning(
@@ -276,10 +293,40 @@ class AnthropicChatGenerator:
 
         return system_messages, non_system_messages, generation_kwargs, anthropic_tools
 
+    def _resolve_flattened_generation_kwargs(self, generation_kwargs: dict[str, Any]) -> dict[str, Any]:
+        generation_kwargs = generation_kwargs.copy()
+
+        disable_parallel_tool_use = generation_kwargs.pop("disable_parallel_tool_use", None)
+        parallel_tool_use = generation_kwargs.pop("parallel_tool_use", None)
+
+        if disable_parallel_tool_use is not None and parallel_tool_use is not None:
+            msg = "Cannot set both disable_parallel_tool_use and parallel_tool_use"
+            raise ValueError(msg)
+        elif parallel_tool_use is not None:
+            disable_parallel_tool_use = not parallel_tool_use
+
+        if disable_parallel_tool_use is not None:
+            tool_choice = generation_kwargs.setdefault("tool_choice", {})
+            tool_choice["disable_parallel_tool_use"] = disable_parallel_tool_use
+            tool_choice.setdefault("type", "auto")  # default value
+
+        tool_choice_type = generation_kwargs.pop("tool_choice_type", None)
+        if tool_choice_type is not None:
+            tool_choice = generation_kwargs.setdefault("tool_choice", {})
+            tool_choice["type"] = tool_choice_type
+
+        thinking_budget_tokens = generation_kwargs.pop("thinking_budget_tokens", None)
+        if thinking_budget_tokens is not None:
+            thinking = generation_kwargs.setdefault("thinking", {})
+            thinking["budget_tokens"] = thinking_budget_tokens
+            thinking.setdefault("type", "enabled")
+
+        return generation_kwargs
+
     def _process_response(
         self,
-        response: Union[Message, Stream[RawMessageStreamEvent]],
-        streaming_callback: Optional[SyncStreamingCallbackT] = None,
+        response: Message | Stream[RawMessageStreamEvent],
+        streaming_callback: SyncStreamingCallbackT | None = None,
     ) -> dict[str, list[ChatMessage]]:
         """
         Process the response from the Anthropic API.
@@ -292,7 +339,7 @@ class AnthropicChatGenerator:
         # we cannot use isinstance(Stream)
         if not isinstance(response, Message):
             chunks: list[StreamingChunk] = []
-            model: Optional[str] = None
+            model: str | None = None
             tool_call_index = -1
             input_tokens = None
             component_info = ComponentInfo.from_component(self)
@@ -346,7 +393,7 @@ class AnthropicChatGenerator:
     async def _process_response_async(
         self,
         response: Any,
-        streaming_callback: Optional[AsyncStreamingCallbackT] = None,
+        streaming_callback: AsyncStreamingCallbackT | None = None,
     ) -> dict[str, list[ChatMessage]]:
         """
         Process the response from the Anthropic API asynchronously.
@@ -360,7 +407,7 @@ class AnthropicChatGenerator:
         # workaround for https://github.com/DataDog/dd-trace-py/issues/12562
         if not isinstance(response, Message):
             chunks: list[StreamingChunk] = []
-            model: Optional[str] = None
+            model: str | None = None
             tool_call_index = -1
             input_tokens = None
             component_info = ComponentInfo.from_component(self)
@@ -419,9 +466,9 @@ class AnthropicChatGenerator:
     def run(
         self,
         messages: list[ChatMessage],
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        generation_kwargs: Optional[dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
+        streaming_callback: StreamingCallbackT | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
     ) -> dict[str, list[ChatMessage]]:
         """
         Invokes the Anthropic API with the given messages and generation kwargs.
@@ -461,9 +508,9 @@ class AnthropicChatGenerator:
     async def run_async(
         self,
         messages: list[ChatMessage],
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        generation_kwargs: Optional[dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
+        streaming_callback: StreamingCallbackT | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
     ) -> dict[str, list[ChatMessage]]:
         """
         Async version of the run method. Invokes the Anthropic API with the given messages and generation kwargs.

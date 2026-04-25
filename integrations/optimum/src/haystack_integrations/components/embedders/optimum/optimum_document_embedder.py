@@ -1,4 +1,9 @@
-from typing import Any, Dict, List, Optional, Union
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from dataclasses import replace
+from typing import Any
 
 from haystack import Document, component, default_from_dict, default_to_dict
 from haystack.utils import Secret
@@ -12,9 +17,10 @@ from .quantization import OptimumEmbedderQuantizationConfig
 @component
 class OptimumDocumentEmbedder:
     """
-    A component for computing `Document` embeddings using models loaded with the
-    [HuggingFace Optimum](https://huggingface.co/docs/optimum/index) library,
-    leveraging the ONNX runtime for high-speed inference.
+    A component for computing `Document` embeddings using models loaded with the HuggingFace Optimum library.
+
+    Uses the [HuggingFace Optimum](https://huggingface.co/docs/optimum/index) library and leverages the ONNX
+    runtime for high-speed inference.
 
     The embedding of each Document is stored in the `embedding` field of the Document.
 
@@ -26,7 +32,7 @@ class OptimumDocumentEmbedder:
     doc = Document(content="I love pizza!")
 
     document_embedder = OptimumDocumentEmbedder(model="sentence-transformers/all-mpnet-base-v2")
-    document_embedder.warm_up()
+    # Components warm up automatically on first run.
 
     result = document_embedder.run([doc])
     print(result["documents"][0].embedding)
@@ -38,21 +44,21 @@ class OptimumDocumentEmbedder:
     def __init__(
         self,
         model: str = "sentence-transformers/all-mpnet-base-v2",
-        token: Optional[Secret] = Secret.from_env_var("HF_API_TOKEN", strict=False),  # noqa: B008
+        token: Secret | None = Secret.from_env_var("HF_API_TOKEN", strict=False),  # noqa: B008
         prefix: str = "",
         suffix: str = "",
         normalize_embeddings: bool = True,
         onnx_execution_provider: str = "CPUExecutionProvider",
-        pooling_mode: Optional[Union[str, OptimumEmbedderPooling]] = None,
-        model_kwargs: Optional[Dict[str, Any]] = None,
-        working_dir: Optional[str] = None,
-        optimizer_settings: Optional[OptimumEmbedderOptimizationConfig] = None,
-        quantizer_settings: Optional[OptimumEmbedderQuantizationConfig] = None,
+        pooling_mode: str | OptimumEmbedderPooling | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+        working_dir: str | None = None,
+        optimizer_settings: OptimumEmbedderOptimizationConfig | None = None,
+        quantizer_settings: OptimumEmbedderQuantizationConfig | None = None,
         batch_size: int = 32,
         progress_bar: bool = True,
-        meta_fields_to_embed: Optional[List[str]] = None,
+        meta_fields_to_embed: list[str] | None = None,
         embedding_separator: str = "\n",
-    ):
+    ) -> None:
         """
         Create a OptimumDocumentEmbedder component.
 
@@ -136,7 +142,7 @@ class OptimumDocumentEmbedder:
         self._backend = _EmbedderBackend(params)
         self._initialized = False
 
-    def warm_up(self):
+    def warm_up(self) -> None:
         """
         Initializes the component.
         """
@@ -146,7 +152,7 @@ class OptimumDocumentEmbedder:
         self._backend.warm_up()
         self._initialized = True
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -159,7 +165,7 @@ class OptimumDocumentEmbedder:
         return default_to_dict(self, **init_params)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OptimumDocumentEmbedder":
+    def from_dict(cls, data: dict[str, Any]) -> "OptimumDocumentEmbedder":
         """
         Deserializes the component from a dictionary.
 
@@ -171,7 +177,7 @@ class OptimumDocumentEmbedder:
         _EmbedderParams.deserialize_inplace(data["init_parameters"])
         return default_from_dict(cls, data)
 
-    def _prepare_texts_to_embed(self, documents: List[Document]) -> List[str]:
+    def _prepare_texts_to_embed(self, documents: list[Document]) -> list[str]:
         """
         Prepare the texts to embed by concatenating the Document text with the metadata fields to embed.
         """
@@ -190,24 +196,23 @@ class OptimumDocumentEmbedder:
             texts_to_embed.append(text_to_embed)
         return texts_to_embed
 
-    @component.output_types(documents=List[Document])
-    def run(self, documents: List[Document]) -> Dict[str, List[Document]]:
+    @component.output_types(documents=list[Document])
+    def run(self, documents: list[Document]) -> dict[str, list[Document]]:
         """
         Embed a list of Documents.
+
         The embedding of each Document is stored in the `embedding` field of the Document.
 
         :param documents:
             A list of Documents to embed.
         :returns:
             The updated Documents with their embeddings.
-        :raises RuntimeError:
-            If the component was not initialized.
         :raises TypeError:
             If the input is not a list of Documents.
         """
         if not self._initialized:
-            msg = "The embedding model has not been loaded. Please call warm_up() before running."
-            raise RuntimeError(msg)
+            self.warm_up()
+
         if not isinstance(documents, list) or (documents and not isinstance(documents[0], Document)):
             msg = (
                 "OptimumDocumentEmbedder expects a list of Documents as input."
@@ -221,7 +226,9 @@ class OptimumDocumentEmbedder:
 
         texts_to_embed = self._prepare_texts_to_embed(documents=documents)
         embeddings = self._backend.embed_texts(texts_to_embed)
-        for doc, emb in zip(documents, embeddings):
-            doc.embedding = emb
 
-        return {"documents": documents}
+        new_documents = []
+        for doc, emb in zip(documents, embeddings, strict=True):
+            new_documents.append(replace(doc, embedding=emb))
+
+        return {"documents": new_documents}

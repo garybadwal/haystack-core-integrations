@@ -1,10 +1,10 @@
 import json
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any
 
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from haystack import component, default_from_dict, default_to_dict, logging
-from haystack.utils.auth import Secret, deserialize_secrets_inplace
+from haystack.utils.auth import Secret
 
 from haystack_integrations.common.amazon_bedrock.errors import (
     AmazonBedrockConfigurationError,
@@ -13,14 +13,6 @@ from haystack_integrations.common.amazon_bedrock.errors import (
 from haystack_integrations.common.amazon_bedrock.utils import get_aws_session
 
 logger = logging.getLogger(__name__)
-
-SUPPORTED_EMBEDDING_MODELS = [
-    "amazon.titan-embed-text-v1",
-    "cohere.embed-english-v3",
-    "cohere.embed-multilingual-v3",
-    "amazon.titan-embed-text-v2:0",
-    "amazon.titan-embed-image-v1",
-]
 
 
 @component
@@ -50,26 +42,21 @@ class AmazonBedrockTextEmbedder:
 
     def __init__(
         self,
-        model: Literal[
-            "amazon.titan-embed-text-v1",
-            "cohere.embed-english-v3",
-            "cohere.embed-multilingual-v3",
-            "amazon.titan-embed-text-v2:0",
-            "amazon.titan-embed-image-v1",
-        ],
-        aws_access_key_id: Optional[Secret] = Secret.from_env_var("AWS_ACCESS_KEY_ID", strict=False),  # noqa: B008
-        aws_secret_access_key: Optional[Secret] = Secret.from_env_var(  # noqa: B008
+        model: str,
+        aws_access_key_id: Secret | None = Secret.from_env_var("AWS_ACCESS_KEY_ID", strict=False),  # noqa: B008
+        aws_secret_access_key: Secret | None = Secret.from_env_var(  # noqa: B008
             "AWS_SECRET_ACCESS_KEY", strict=False
         ),
-        aws_session_token: Optional[Secret] = Secret.from_env_var("AWS_SESSION_TOKEN", strict=False),  # noqa: B008
-        aws_region_name: Optional[Secret] = Secret.from_env_var("AWS_DEFAULT_REGION", strict=False),  # noqa: B008
-        aws_profile_name: Optional[Secret] = Secret.from_env_var("AWS_PROFILE", strict=False),  # noqa: B008
-        boto3_config: Optional[Dict[str, Any]] = None,
+        aws_session_token: Secret | None = Secret.from_env_var("AWS_SESSION_TOKEN", strict=False),  # noqa: B008
+        aws_region_name: Secret | None = Secret.from_env_var("AWS_DEFAULT_REGION", strict=False),  # noqa: B008
+        aws_profile_name: Secret | None = Secret.from_env_var("AWS_PROFILE", strict=False),  # noqa: B008
+        boto3_config: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         """
-        Initializes the AmazonBedrockTextEmbedder with the provided parameters. The parameters are passed to the
-        Amazon Bedrock client.
+        Initializes the AmazonBedrockTextEmbedder with the provided parameters.
+
+        The parameters are passed to the Amazon Bedrock client.
 
         Note that the AWS credentials are not required if the AWS environment is configured correctly. These are loaded
         automatically from the environment or the AWS configuration file and do not need to be provided explicitly via
@@ -77,23 +64,28 @@ class AmazonBedrockTextEmbedder:
         constructor. Aside from model, three required parameters are `aws_access_key_id`, `aws_secret_access_key`,
          and `aws_region_name`.
 
-        :param model: The embedding model to use. The model has to be specified in the format outlined in the Amazon
-            Bedrock [documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-ids.html).
+        :param model: The embedding model to use.
+            Amazon Titan and Cohere embedding models are supported, for example:
+            "amazon.titan-embed-text-v1", "amazon.titan-embed-text-v2:0", "amazon.titan-embed-image-v1",
+            "cohere.embed-english-v3", "cohere.embed-multilingual-v3", "cohere.embed-v4:0".
+            To find all supported models, refer to the Amazon Bedrock
+            [documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html) and
+            filter for "embedding", then select models from the Amazon Titan and Cohere series.
         :param aws_access_key_id: AWS access key ID.
         :param aws_secret_access_key: AWS secret access key.
         :param aws_session_token: AWS session token.
         :param aws_region_name: AWS region name.
         :param aws_profile_name: AWS profile name.
-        :param boto3_config: The configuration for the boto3 client.
+        :param boto3_config: Dictionary of configuration options for the underlying Boto3 client.
+            Can be used to tune [retry behavior](https://docs.aws.amazon.com/boto3/latest/guide/retries.html)
+            and other low-level settings like timeouts and connection management.
         :param kwargs: Additional parameters to pass for model inference. For example, `input_type` and `truncate` for
             Cohere models.
         :raises ValueError: If the model is not supported.
         :raises AmazonBedrockConfigurationError: If the AWS environment is not configured correctly.
         """
-        if not model or model not in SUPPORTED_EMBEDDING_MODELS:
-            msg = "Please provide a valid model from the list of supported models: " + ", ".join(
-                SUPPORTED_EMBEDDING_MODELS
-            )
+        if "titan" not in model and "cohere" not in model:
+            msg = f"Model {model} is not supported. Only Amazon Titan and Cohere embedding models are supported."
             raise ValueError(msg)
 
         self.model = model
@@ -105,7 +97,7 @@ class AmazonBedrockTextEmbedder:
         self.boto3_config = boto3_config
         self.kwargs = kwargs
 
-        def resolve_secret(secret: Optional[Secret]) -> Optional[str]:
+        def resolve_secret(secret: Secret | None) -> str | None:
             return secret.resolve_value() if secret else None
 
         try:
@@ -127,9 +119,10 @@ class AmazonBedrockTextEmbedder:
             )
             raise AmazonBedrockConfigurationError(msg) from exception
 
-    @component.output_types(embedding=List[float])
-    def run(self, text: str) -> Dict[str, List[float]]:
-        """Embeds the input text using the Amazon Bedrock model.
+    @component.output_types(embedding=list[float])
+    def run(self, text: str) -> dict[str, list[float]]:
+        """
+        Embeds the input text using the Amazon Bedrock model.
 
         :param text: The input text to embed.
         :returns: A dictionary with the following keys:
@@ -168,16 +161,21 @@ class AmazonBedrockTextEmbedder:
         response_body = json.loads(response.get("body").read())
 
         if "cohere" in self.model:
-            embedding = response_body["embeddings"][0]
+            cohere_embeddings = response_body["embeddings"]
+            # depending on the model, Cohere returns a dict with the embedding types as keys or a list of lists
+            embeddings_list = (
+                next(iter(cohere_embeddings.values())) if isinstance(cohere_embeddings, dict) else cohere_embeddings
+            )
+            embedding = embeddings_list[0]
         elif "titan" in self.model:
             embedding = response_body["embedding"]
         else:
-            msg = f"Unsupported model {self.model}. Supported models are: {', '.join(SUPPORTED_EMBEDDING_MODELS)}"
+            msg = f"Model {self.model} is not supported. Only Amazon Titan and Cohere embedding models are supported."
             raise ValueError(msg)
 
         return {"embedding": embedding}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -186,18 +184,18 @@ class AmazonBedrockTextEmbedder:
         """
         return default_to_dict(
             self,
-            aws_access_key_id=self.aws_access_key_id.to_dict() if self.aws_access_key_id else None,
-            aws_secret_access_key=self.aws_secret_access_key.to_dict() if self.aws_secret_access_key else None,
-            aws_session_token=self.aws_session_token.to_dict() if self.aws_session_token else None,
-            aws_region_name=self.aws_region_name.to_dict() if self.aws_region_name else None,
-            aws_profile_name=self.aws_profile_name.to_dict() if self.aws_profile_name else None,
+            aws_access_key_id=self.aws_access_key_id,
+            aws_secret_access_key=self.aws_secret_access_key,
+            aws_session_token=self.aws_session_token,
+            aws_region_name=self.aws_region_name,
+            aws_profile_name=self.aws_profile_name,
             model=self.model,
             boto3_config=self.boto3_config,
             **self.kwargs,
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AmazonBedrockTextEmbedder":
+    def from_dict(cls, data: dict[str, Any]) -> "AmazonBedrockTextEmbedder":
         """
         Deserializes the component from a dictionary.
 
@@ -206,8 +204,4 @@ class AmazonBedrockTextEmbedder:
         :returns:
             Deserialized component.
         """
-        deserialize_secrets_inplace(
-            data["init_parameters"],
-            ["aws_access_key_id", "aws_secret_access_key", "aws_session_token", "aws_region_name", "aws_profile_name"],
-        )
         return default_from_dict(cls, data)

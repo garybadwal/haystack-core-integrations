@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from dataclasses import replace
+from typing import Any, Literal
 
 from google.genai import types
 from haystack import Document, component, default_from_dict, default_to_dict, logging
 from haystack.utils import Secret, deserialize_secrets_inplace
-from more_itertools import batched
 from tqdm import tqdm
 
 from haystack_integrations.components.common.google_genai.utils import _get_client
@@ -27,7 +27,7 @@ class GoogleGenAIDocumentEmbedder:
     from haystack_integrations.components.embedders.google_genai import GoogleGenAIDocumentEmbedder
 
     # export the environment variable (GOOGLE_API_KEY or GEMINI_API_KEY)
-    document_embedder = GoogleGenAIDocumentEmbedder(model="text-embedding-004")
+    document_embedder = GoogleGenAIDocumentEmbedder(model="gemini-embedding-001")
 
     **2. Vertex AI (Application Default Credentials)**
     ```python
@@ -38,7 +38,7 @@ class GoogleGenAIDocumentEmbedder:
         api="vertex",
         vertex_ai_project="my-project",
         vertex_ai_location="us-central1",
-        model="text-embedding-004"
+        model="gemini-embedding-001"
     )
     ```
 
@@ -49,7 +49,7 @@ class GoogleGenAIDocumentEmbedder:
     # export the environment variable (GOOGLE_API_KEY or GEMINI_API_KEY)
     document_embedder = GoogleGenAIDocumentEmbedder(
         api="vertex",
-        model="text-embedding-004"
+        model="gemini-embedding-001"
     )
     ```
 
@@ -75,16 +75,16 @@ class GoogleGenAIDocumentEmbedder:
         *,
         api_key: Secret = Secret.from_env_var(["GOOGLE_API_KEY", "GEMINI_API_KEY"], strict=False),
         api: Literal["gemini", "vertex"] = "gemini",
-        vertex_ai_project: Optional[str] = None,
-        vertex_ai_location: Optional[str] = None,
-        model: str = "text-embedding-004",
+        vertex_ai_project: str | None = None,
+        vertex_ai_location: str | None = None,
+        model: str = "gemini-embedding-001",
         prefix: str = "",
         suffix: str = "",
         batch_size: int = 32,
         progress_bar: bool = True,
-        meta_fields_to_embed: Optional[List[str]] = None,
+        meta_fields_to_embed: list[str] | None = None,
         embedding_separator: str = "\n",
-        config: Optional[Dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         """
         Creates an GoogleGenAIDocumentEmbedder component.
@@ -100,7 +100,7 @@ class GoogleGenAIDocumentEmbedder:
             Required when using Vertex AI with Application Default Credentials.
         :param model:
             The name of the model to use for calculating embeddings.
-            The default model is `text-embedding-ada-002`.
+            The default model is `gemini-embedding-001`.
         :param prefix:
             A string to add at the beginning of each text.
         :param suffix:
@@ -138,7 +138,7 @@ class GoogleGenAIDocumentEmbedder:
             vertex_ai_location=vertex_ai_location,
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -162,7 +162,7 @@ class GoogleGenAIDocumentEmbedder:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "GoogleGenAIDocumentEmbedder":
+    def from_dict(cls, data: dict[str, Any]) -> "GoogleGenAIDocumentEmbedder":
         """
         Deserializes the component from a dictionary.
 
@@ -174,11 +174,11 @@ class GoogleGenAIDocumentEmbedder:
         deserialize_secrets_inplace(data["init_parameters"], keys=["api_key"])
         return default_from_dict(cls, data)
 
-    def _prepare_texts_to_embed(self, documents: List[Document]) -> List[str]:
+    def _prepare_texts_to_embed(self, documents: list[Document]) -> list[str]:
         """
         Prepare the texts to embed by concatenating the Document text with the metadata fields to embed.
         """
-        texts_to_embed: List[str] = []
+        texts_to_embed: list[str] = []
         for doc in documents:
             meta_values_to_embed = [
                 str(doc.meta[key])
@@ -194,19 +194,20 @@ class GoogleGenAIDocumentEmbedder:
         return texts_to_embed
 
     def _embed_batch(
-        self, texts_to_embed: List[str], batch_size: int
-    ) -> Tuple[List[Optional[List[float]]], Dict[str, Any]]:
+        self, texts_to_embed: list[str], batch_size: int
+    ) -> tuple[list[list[float] | None], dict[str, Any]]:
         """
         Embed a list of texts in batches.
         """
         resolved_config = types.EmbedContentConfig(**self._config) if self._config else None
 
         all_embeddings = []
-        meta: Dict[str, Any] = {}
-        for batch in tqdm(
-            batched(texts_to_embed, batch_size), disable=not self._progress_bar, desc="Calculating embeddings"
+        meta: dict[str, Any] = {}
+        for i in tqdm(
+            range(0, len(texts_to_embed), batch_size), disable=not self._progress_bar, desc="Calculating embeddings"
         ):
-            args: Dict[str, Any] = {"model": self._model, "contents": [b[1] for b in batch]}
+            batch = texts_to_embed[i : i + batch_size]
+            args: dict[str, Any] = {"model": self._model, "contents": batch}
             if resolved_config:
                 args["config"] = resolved_config
 
@@ -226,18 +227,19 @@ class GoogleGenAIDocumentEmbedder:
         return all_embeddings, meta
 
     async def _embed_batch_async(
-        self, texts_to_embed: List[str], batch_size: int
-    ) -> Tuple[List[Optional[List[float]]], Dict[str, Any]]:
+        self, texts_to_embed: list[str], batch_size: int
+    ) -> tuple[list[list[float] | None], dict[str, Any]]:
         """
         Embed a list of texts in batches asynchronously.
         """
 
         all_embeddings = []
-        meta: Dict[str, Any] = {}
-        for batch in tqdm(
-            batched(texts_to_embed, batch_size), disable=not self._progress_bar, desc="Calculating embeddings"
+        meta: dict[str, Any] = {}
+        for i in tqdm(
+            range(0, len(texts_to_embed), batch_size), disable=not self._progress_bar, desc="Calculating embeddings"
         ):
-            args: Dict[str, Any] = {"model": self._model, "contents": [b[1] for b in batch]}
+            batch = texts_to_embed[i : i + batch_size]
+            args: dict[str, Any] = {"model": self._model, "contents": batch}
             if self._config:
                 args["config"] = types.EmbedContentConfig(**self._config) if self._config else None
 
@@ -256,8 +258,8 @@ class GoogleGenAIDocumentEmbedder:
 
         return all_embeddings, meta
 
-    @component.output_types(documents=List[Document], meta=Dict[str, Any])
-    def run(self, documents: List[Document]) -> Union[Dict[str, List[Document]], Dict[str, Any]]:
+    @component.output_types(documents=list[Document], meta=dict[str, Any])
+    def run(self, documents: list[Document]) -> dict[str, list[Document]] | dict[str, Any]:
         """
         Embeds a list of documents.
 
@@ -278,16 +280,17 @@ class GoogleGenAIDocumentEmbedder:
 
         texts_to_embed = self._prepare_texts_to_embed(documents=documents)
 
-        meta: Dict[str, Any]
+        meta: dict[str, Any]
         embeddings, meta = self._embed_batch(texts_to_embed=texts_to_embed, batch_size=self._batch_size)
 
-        for doc, emb in zip(documents, embeddings):
-            doc.embedding = emb
+        new_documents = []
+        for doc, emb in zip(documents, embeddings, strict=True):
+            new_documents.append(replace(doc, embedding=emb))
 
-        return {"documents": documents, "meta": meta}
+        return {"documents": new_documents, "meta": meta}
 
-    @component.output_types(documents=List[Document], meta=Dict[str, Any])
-    async def run_async(self, documents: List[Document]) -> Union[Dict[str, List[Document]], Dict[str, Any]]:
+    @component.output_types(documents=list[Document], meta=dict[str, Any])
+    async def run_async(self, documents: list[Document]) -> dict[str, list[Document]] | dict[str, Any]:
         """
         Embeds a list of documents asynchronously.
 
@@ -310,7 +313,8 @@ class GoogleGenAIDocumentEmbedder:
 
         embeddings, meta = await self._embed_batch_async(texts_to_embed=texts_to_embed, batch_size=self._batch_size)
 
-        for doc, emb in zip(documents, embeddings):
-            doc.embedding = emb
+        new_documents = []
+        for doc, emb in zip(documents, embeddings, strict=True):
+            new_documents.append(replace(doc, embedding=emb))
 
-        return {"documents": documents, "meta": meta}
+        return {"documents": new_documents, "meta": meta}

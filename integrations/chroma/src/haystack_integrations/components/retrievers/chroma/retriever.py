@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Optional, Union
+from typing import Any
 
 from haystack import Document, component, default_from_dict, default_to_dict
 from haystack.document_stores.types import FilterPolicy
@@ -48,11 +48,13 @@ class ChromaQueryTextRetriever:
     def __init__(
         self,
         document_store: ChromaDocumentStore,
-        filters: Optional[dict[str, Any]] = None,
+        filters: dict[str, Any] | None = None,
         top_k: int = 10,
-        filter_policy: Union[str, FilterPolicy] = FilterPolicy.REPLACE,
-    ):
+        filter_policy: str | FilterPolicy = FilterPolicy.REPLACE,
+    ) -> None:
         """
+        Initialize the ChromaQueryTextRetriever.
+
         :param document_store: an instance of `ChromaDocumentStore`.
         :param filters: filters to narrow down the search space.
         :param top_k: the maximum number of documents to retrieve.
@@ -69,8 +71,8 @@ class ChromaQueryTextRetriever:
     def run(
         self,
         query: str,
-        filters: Optional[dict[str, Any]] = None,
-        top_k: Optional[int] = None,
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
     ) -> dict[str, Any]:
         """
         Run the retriever on the given input data.
@@ -94,8 +96,8 @@ class ChromaQueryTextRetriever:
     async def run_async(
         self,
         query: str,
-        filters: Optional[dict[str, Any]] = None,
-        top_k: Optional[int] = None,
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
     ) -> dict[str, Any]:
         """
         Asynchronously run the retriever on the given input data.
@@ -161,11 +163,13 @@ class ChromaEmbeddingRetriever:
     def __init__(
         self,
         document_store: ChromaDocumentStore,
-        filters: Optional[dict[str, Any]] = None,
+        filters: dict[str, Any] | None = None,
         top_k: int = 10,
-        filter_policy: Union[str, FilterPolicy] = FilterPolicy.REPLACE,
-    ):
+        filter_policy: str | FilterPolicy = FilterPolicy.REPLACE,
+    ) -> None:
         """
+        Initialize the ChromaEmbeddingRetriever.
+
         :param document_store: an instance of `ChromaDocumentStore`.
         :param filters: filters to narrow down the search space.
         :param top_k: the maximum number of documents to retrieve.
@@ -182,8 +186,8 @@ class ChromaEmbeddingRetriever:
     def run(
         self,
         query_embedding: list[float],
-        filters: Optional[dict[str, Any]] = None,
-        top_k: Optional[int] = None,
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
     ) -> dict[str, Any]:
         """
         Run the retriever on the given input data.
@@ -209,8 +213,8 @@ class ChromaEmbeddingRetriever:
     async def run_async(
         self,
         query_embedding: list[float],
-        filters: Optional[dict[str, Any]] = None,
-        top_k: Optional[int] = None,
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
     ) -> dict[str, Any]:
         """
         Asynchronously run the retriever on the given input data.

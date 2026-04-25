@@ -1,14 +1,20 @@
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict
+from typing import Any
 
 from optimum.onnxruntime.configuration import AutoQuantizationConfig, QuantizationConfig
 
 
 class OptimumEmbedderQuantizationMode(Enum):
     """
-    [Dynamic Quantization modes](https://huggingface.co/docs/optimum/onnxruntime/usage_guides/quantization)
-    support by the Optimum Embedders.
+    Dynamic Quantization modes supported by the Optimum Embedders.
+
+    See [Optimum ONNX quantization docs](https://huggingface.co/docs/optimum/onnxruntime/usage_guides/quantization)
+    for more details.
     """
 
     #: Quantization for the ARM64 architecture.
@@ -23,7 +29,7 @@ class OptimumEmbedderQuantizationMode(Enum):
     #: Quantization with AVX-512 and VNNI instructions.
     AVX512_VNNI = "avx512_vnni"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.value
 
     @classmethod
@@ -77,7 +83,7 @@ class OptimumEmbedderQuantizationConfig:
             msg = f"Unknown quantization mode '{self.mode}'"
             raise ValueError(msg)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Convert the configuration to a dictionary.
 
@@ -90,7 +96,7 @@ class OptimumEmbedderQuantizationConfig:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OptimumEmbedderQuantizationConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "OptimumEmbedderQuantizationConfig":
         """
         Create a configuration from a dictionary.
 

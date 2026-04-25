@@ -3,12 +3,12 @@ name: Core / Sync API reference with Docusaurus
 on:
   push:
     tags:
-      - "**-v[0-9].[0-9]+.[0-9]+"
+      - "**-v[0-9]+.[0-9]+.[0-9]+*"
 
   workflow_dispatch: # Activate this workflow manually
     inputs:
       tag:
-        description: "Tag with this format: integrations/<INTEGRATION_FOLDER_NAME>-v1.0.0. When running this workflow manually, version is irrelevant so you can use any value."
+        description: "Tag with this format: integrations/<INTEGRATION_FOLDER_NAME>-v1.0.0 or integrations/<INTEGRATION_FOLDER_NAME>-v1.0.0.post0. When running this workflow manually, version is irrelevant so you can use any value."
         required: true
         type: string
         default: integrations/<INTEGRATION_FOLDER_NAME>-v1.0.0
@@ -18,23 +18,21 @@ env:
 
 jobs:
   generate-api-reference:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       integration_name: ${{ steps.pathfinder.outputs.integration_name }}
 
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -U haystack-pydoc-tools
+      - name: Install Hatch
+        run: pip install hatch
 
       - name: Get project folder
         id: pathfinder
@@ -50,10 +48,10 @@ jobs:
       - name: Generate API reference
         working-directory: ${{ steps.pathfinder.outputs.project_path }}
 
-        run: pydoc-markdown pydoc/config_docusaurus.yml
+        run: hatch run docs
 
       - name: Upload API reference artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.pathfinder.outputs.integration_name }}
           path: ${{ steps.pathfinder.outputs.project_path }}/${{ steps.pathfinder.outputs.integration_name }}.md
@@ -63,24 +61,24 @@ jobs:
 
 
   sync-api-reference:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs: generate-api-reference
     
     steps:
       - name: Checkout Haystack repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: deepset-ai/haystack
           ref: main
           token: ${{ secrets.HAYSTACK_BOT_TOKEN }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.10"          
 
       - name: Download API reference artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.generate-api-reference.outputs.integration_name }}
 
@@ -107,7 +105,7 @@ jobs:
           os.remove(artifact_filename)
 
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         env:
           INTEGRATION_NAME: ${{ needs.generate-api-reference.outputs.integration_name }}
         with:

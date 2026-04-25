@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, ClassVar
 
 from haystack import component, default_from_dict, default_to_dict
 from haystack.utils import Secret, deserialize_secrets_inplace
@@ -32,27 +32,34 @@ class CohereTextEmbedder:
     ```
     """
 
+    SUPPORTED_MODELS: ClassVar[list[str]] = [
+        "embed-v4.0",
+        "embed-english-v3.0",
+        "embed-english-light-v3.0",
+        "embed-multilingual-v3.0",
+        "embed-multilingual-light-v3.0",
+    ]
+    """A non-exhaustive list of embed models supported by this component.
+    See https://docs.cohere.com/docs/models#embed for the full list."""
+
     def __init__(
         self,
         api_key: Secret = Secret.from_env_var(["COHERE_API_KEY", "CO_API_KEY"]),
-        model: str = "embed-english-v2.0",
+        model: str = "embed-v4.0",
         input_type: str = "search_query",
         api_base_url: str = "https://api.cohere.com",
         truncate: str = "END",
         timeout: float = 120.0,
-        embedding_type: Optional[EmbeddingTypes] = None,
-    ):
+        embedding_type: EmbeddingTypes | None = None,
+    ) -> None:
         """
+        Initialize the CohereTextEmbedder.
+
         :param api_key: the Cohere API key.
-        :param model: the name of the model to use. Supported Models are:
-            `"embed-english-v3.0"`, `"embed-english-light-v3.0"`, `"embed-multilingual-v3.0"`,
-            `"embed-multilingual-light-v3.0"`, `"embed-english-v2.0"`, `"embed-english-light-v2.0"`,
-            `"embed-multilingual-v2.0"`. This list of all supported models can be found in the
-            [model documentation](https://docs.cohere.com/docs/models#representation).
+        :param model: the name of the model to use.
+            Read [Cohere documentation](https://docs.cohere.com/docs/models#embed) for a list of all supported models.
         :param input_type: specifies the type of input you're giving to the model. Supported values are
-        "search_document", "search_query", "classification" and "clustering". Not
-            required for older versions of the embedding models (meaning anything lower than v3), but is required for
-            more recent versions (meaning anything bigger than v2).
+        "search_document", "search_query", "classification" and "clustering".
         :param api_base_url: the Cohere API Base url.
         :param truncate: truncate embeddings that are too long from start or end, ("NONE"|"START"|"END").
             Passing "START" will discard the start of the input. "END" will discard the end of the input. In both
@@ -93,7 +100,7 @@ class CohereTextEmbedder:
             )
             raise TypeError(msg)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -112,7 +119,7 @@ class CohereTextEmbedder:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CohereTextEmbedder":
+    def from_dict(cls, data: dict[str, Any]) -> "CohereTextEmbedder":
         """
         Deserializes the component from a dictionary.
 
@@ -133,8 +140,8 @@ class CohereTextEmbedder:
 
         return default_from_dict(cls, data)
 
-    @component.output_types(embedding=List[float], meta=Dict[str, Any])
-    def run(self, text: str) -> Dict[str, Union[List[float], Dict[str, Any]]]:
+    @component.output_types(embedding=list[float], meta=dict[str, Any])
+    def run(self, text: str) -> dict[str, list[float] | dict[str, Any]]:
         """
         Embed text.
 
@@ -160,8 +167,8 @@ class CohereTextEmbedder:
 
         return {"embedding": embedding[0], "meta": metadata}
 
-    @component.output_types(embedding=List[float], meta=Dict[str, Any])
-    async def run_async(self, text: str) -> Dict[str, Union[List[float], Dict[str, Any]]]:
+    @component.output_types(embedding=list[float], meta=dict[str, Any])
+    async def run_async(self, text: str) -> dict[str, list[float] | dict[str, Any]]:
         """
         Asynchronously embed text.
 

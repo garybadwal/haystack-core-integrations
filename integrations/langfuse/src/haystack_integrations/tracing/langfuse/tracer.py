@@ -4,13 +4,15 @@
 
 import contextlib
 import os
+import sys
 from abc import ABC, abstractmethod
 from collections import Counter
+from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Iterator, List, Literal, Optional, cast
+from typing import Any, Literal, cast
 
 from haystack import default_from_dict, default_to_dict, logging
 from haystack.dataclasses import ChatMessage
@@ -20,7 +22,8 @@ from haystack.tracing import utils as tracing_utils
 
 import langfuse
 from langfuse import LangfuseSpan as LangfuseClientSpan
-from langfuse.types import TraceMetadata
+from langfuse import propagate_attributes
+from langfuse.types import TraceContext
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +45,11 @@ ObservationSpanType = Literal["tool", "agent", "retriever", "embedding", "genera
 
 # External session metadata for trace correlation (Haystack system)
 # Stores trace_id, user_id, session_id, tags, version for root trace creation
-tracing_context_var: ContextVar[Dict[Any, Any]] = ContextVar("tracing_context")
+tracing_context_var: ContextVar[dict[Any, Any]] = ContextVar("tracing_context")
 
 # Internal span execution hierarchy for our tracer
 # Manages parent-child relationships and prevents cross-request span interleaving
-span_stack_var: ContextVar[Optional[List["LangfuseSpan"]]] = ContextVar("span_stack", default=None)
+span_stack_var: ContextVar[list["LangfuseSpan"] | None] = ContextVar("span_stack", default=None)
 
 
 class LangfuseSpan(Span):
@@ -59,11 +62,10 @@ class LangfuseSpan(Span):
         Initialize a LangfuseSpan instance.
 
         :param context_manager: The context manager from Langfuse created with
-        `langfuse.get_client().start_as_current_span` or
         `langfuse.get_client().start_as_current_observation`.
         """
         self._span = context_manager.__enter__()
-        self._data: Dict[str, Any] = {}
+        self._data: dict[str, Any] = {}
         self._context_manager = context_manager
 
     def set_tag(self, key: str, value: Any) -> None:
@@ -89,7 +91,10 @@ class LangfuseSpan(Span):
         if key.endswith(".input"):
             if "messages" in value:
                 messages = [m.to_openai_dict_format(require_tool_call_ids=False) for m in value["messages"]]
-                self._span.update(input=messages)
+                if isinstance(gen_kwargs := value.get("generation_kwargs"), dict):
+                    self._span.update(input={"messages": messages, "generation_kwargs": gen_kwargs})
+                else:
+                    self._span.update(input=messages)
             else:
                 coerced_value = tracing_utils.coerce_tag_value(value)
                 self._span.update(input=coerced_value)
@@ -114,7 +119,7 @@ class LangfuseSpan(Span):
         """
         return self._span
 
-    def get_data(self) -> Dict[str, Any]:
+    def get_data(self) -> dict[str, Any]:
         """
         Return the data associated with the span.
 
@@ -122,7 +127,8 @@ class LangfuseSpan(Span):
         """
         return self._data
 
-    def get_correlation_data_for_logs(self) -> Dict[str, Any]:
+    def get_correlation_data_for_logs(self) -> dict[str, Any]:
+        """Return correlation data for log enrichment."""
         return {}
 
 
@@ -148,9 +154,9 @@ class SpanContext:
 
     name: str
     operation_name: str
-    component_type: Optional[str]
-    tags: Dict[str, Any]
-    parent_span: Optional[Span]
+    component_type: str | None
+    tags: dict[str, Any]
+    parent_span: Span | None
     trace_name: str = "Haystack"
     public: bool = False
 
@@ -187,7 +193,7 @@ class SpanHandler(ABC):
     """
 
     def __init__(self) -> None:
-        self.tracer: Optional[langfuse.Langfuse] = None
+        self.tracer: langfuse.Langfuse | None = None
 
     def init_tracer(self, tracer: langfuse.Langfuse) -> None:
         """
@@ -213,7 +219,7 @@ class SpanHandler(ABC):
         pass
 
     @abstractmethod
-    def handle(self, span: LangfuseSpan, component_type: Optional[str]) -> None:
+    def handle(self, span: LangfuseSpan, component_type: str | None) -> None:
         """
         Process a span after component execution by attaching metadata and metrics.
 
@@ -231,50 +237,41 @@ class SpanHandler(ABC):
         pass
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SpanHandler":
+    def from_dict(cls, data: dict[str, Any]) -> "SpanHandler":
+        """Deserialize a SpanHandler from a dictionary."""
         return default_from_dict(cls, data)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize this SpanHandler to a dictionary."""
         return default_to_dict(self)
 
 
-def _sanitize_usage_data(usage: Dict[str, Any]) -> Dict[str, Any]:
+def _sanitize_usage_data(usage: dict[str, Any]) -> dict[str, Any]:
     """
-    Sanitize usage data for Langfuse by flattening to a single-level dictionary.
+    Sanitize usage data for Langfuse by converting provider-specific keys to Langfuse standard keys.
 
-    Langfuse's usage_details must be a flat dictionary with only numeric values. This function:
-    - Flattens nested dictionaries using dot notation (e.g., cache_creation.input_tokens)
-    - Keeps int and float values
-    - Skips None, boolean, string, and other non-numeric types
+    Langfuse expects usage_details with standard keys: input_tokens, output_tokens, and total_tokens.
+    This function converts provider-specific keys to Langfuse's expected format:
+    - prompt_tokens -> input_tokens
+    - completion_tokens -> output_tokens
+    - total_tokens -> total_tokens (preserved as-is)
 
     :param usage: Raw usage dictionary from the provider.
-    :returns: Flat dictionary with only numeric values (int or float).
+    :returns: Dictionary with Langfuse standard keys (input_tokens, output_tokens, total_tokens).
     """
     if not isinstance(usage, dict):
         return {}
 
-    sanitized: Dict[str, Any] = {}
+    # Start with Langfuse standard keys from usage if present
+    sanitized: dict[str, Any] = {
+        k: v for k, v in usage.items() if k in ("input_tokens", "output_tokens", "total_tokens")
+    }
+    # Convert provider format to Langfuse standard keys if not already present
+    if "input_tokens" not in sanitized and "prompt_tokens" in usage:
+        sanitized["input_tokens"] = usage["prompt_tokens"]
+    if "output_tokens" not in sanitized and "completion_tokens" in usage:
+        sanitized["output_tokens"] = usage["completion_tokens"]
 
-    def _flatten(data: Dict[str, Any], prefix: str = "") -> None:
-        """Recursively flatten nested dictionaries."""
-        for key, value in data.items():
-            full_key = f"{prefix}.{key}" if prefix else key
-
-            if value is None:
-                # Skip None values (e.g., Anthropic's server_tool_use)
-                continue
-            elif isinstance(value, bool):
-                # Skip boolean values
-                continue
-            elif isinstance(value, (int, float)):
-                # Keep numeric values
-                sanitized[full_key] = value
-            elif isinstance(value, dict):
-                # Recursively flatten nested dicts
-                _flatten(value, full_key)
-            # Skip strings and other non-numeric types (e.g., Anthropic's service_tier)
-
-    _flatten(usage)
     return sanitized
 
 
@@ -282,6 +279,7 @@ class DefaultSpanHandler(SpanHandler):
     """DefaultSpanHandler provides the default Langfuse tracing behavior for Haystack."""
 
     def create_span(self, context: SpanContext) -> LangfuseSpan:
+        """Create a Langfuse span based on the given context."""
         if self.tracer is None:
             message = (
                 "Tracer is not initialized. "
@@ -296,30 +294,20 @@ class DefaultSpanHandler(SpanHandler):
             root_span_type: Literal["agent", "span"] = (
                 "agent" if context.operation_name == "haystack.agent.run" else "span"
             )
-            # Create a new trace when there's no parent span
-            span_context_manager = self.tracer.start_as_current_observation(
-                name=context.trace_name, version=tracing_ctx.get("version"), as_type=root_span_type
+            trace_context: TraceContext | None = cast(
+                TraceContext, {"trace_id": tracing_ctx.get("trace_id")} if tracing_ctx.get("trace_id") else None
             )
 
-            # Create LangfuseSpan which will handle entering the context manager
+            span_context_manager = self.tracer.start_as_current_observation(
+                trace_context=trace_context,
+                name=context.trace_name,
+                version=tracing_ctx.get("version"),
+                as_type=root_span_type,
+            )
             span = LangfuseSpan(span_context_manager)
 
-            # Build trace metadata from context
-            trace_metadata: TraceMetadata = {
-                "name": context.trace_name,
-                "user_id": tracing_ctx.get("user_id"),
-                "session_id": tracing_ctx.get("session_id"),
-                "version": tracing_ctx.get("version"),
-                "metadata": None,
-                "tags": tracing_ctx.get("tags"),
-                "public": context.public,
-                "release": None,
-            }
-
-            # Filter out None values and apply trace attributes
-            trace_attrs = {k: v for k, v in trace_metadata.items() if v is not None}
-            if trace_attrs:
-                span._span.update_trace(**trace_attrs)
+            if context.public:
+                span.raw_span().set_trace_as_public()
 
             return span
 
@@ -343,18 +331,19 @@ class DefaultSpanHandler(SpanHandler):
                 )
             )
         else:
-            return LangfuseSpan(self.tracer.start_as_current_span(name=context.name))
+            return LangfuseSpan(self.tracer.start_as_current_observation(name=context.name))
 
-    def handle(self, span: LangfuseSpan, component_type: Optional[str]) -> None:
+    def handle(self, span: LangfuseSpan, component_type: str | None) -> None:
+        """Process and enrich a span after component execution."""
         # If the span is at the pipeline level, we add input and output keys to the span
         at_pipeline_level = span.get_data().get(_PIPELINE_INPUT_KEY) is not None
         if at_pipeline_level:
             coerced_input = tracing_utils.coerce_tag_value(span.get_data().get(_PIPELINE_INPUT_KEY))
             coerced_output = tracing_utils.coerce_tag_value(span.get_data().get(_PIPELINE_OUTPUT_KEY))
-            span.raw_span().update_trace(input=coerced_input, output=coerced_output)
+            span.raw_span().update(input=coerced_input, output=coerced_output)
         # special case for ToolInvoker (to update the span name to be: `original_component_name - [tool_names]`)
         if component_type == "ToolInvoker":
-            tool_names: List[str] = []
+            tool_names: list[str] = []
             messages = span.get_data().get(_COMPONENT_INPUT_KEY, {}).get("messages", [])
             for message in messages:
                 if isinstance(message, ChatMessage) and message.tool_calls:
@@ -391,6 +380,30 @@ class DefaultSpanHandler(SpanHandler):
                 usage = meta[0].get("usage")
                 sanitized_usage = _sanitize_usage_data(usage) if usage else None
                 span.raw_span().update(usage_details=sanitized_usage, model=meta[0].get("model"))
+        elif component_type and component_type.endswith("Embedder"):
+            # Extract usage data from embedder output
+            output = span.get_data().get(_COMPONENT_OUTPUT_KEY, {})
+            meta = output.get("meta")
+
+            if meta and isinstance(meta, dict):
+                # Build update parameters with available data
+                update_params: dict[str, Any] = {}
+
+                # Try both common formats: 'usage' (OpenAI) or 'billed_units' (Cohere)
+                usage = meta.get("usage") or meta.get("billed_units")
+                if usage:
+                    sanitized_usage = _sanitize_usage_data(usage)
+                    if sanitized_usage:
+                        update_params["usage_details"] = sanitized_usage
+
+                # Some embedders may provide model information
+                model = meta.get("model")
+                if model and isinstance(model, str):
+                    update_params["model"] = model
+
+                # Single update call if we have data to update
+                if update_params:
+                    span.raw_span().update(**update_params)
 
 
 class LangfuseTracer(Tracer):
@@ -403,7 +416,7 @@ class LangfuseTracer(Tracer):
         tracer: langfuse.Langfuse,
         name: str = "Haystack",
         public: bool = False,
-        span_handler: Optional[SpanHandler] = None,
+        span_handler: SpanHandler | None = None,
     ) -> None:
         """
         Initialize a LangfuseTracer instance.
@@ -424,7 +437,7 @@ class LangfuseTracer(Tracer):
             )
         self._tracer = tracer
         # Keep _context as deprecated shim to avoid AttributeError if anyone uses it
-        self._context: List[LangfuseSpan] = []
+        self._context: list[LangfuseSpan] = []
         self._name = name
         self._public = public
         self.enforce_flush = os.getenv(HAYSTACK_LANGFUSE_ENFORCE_FLUSH_ENV_VAR, "true").lower() == "true"
@@ -433,11 +446,13 @@ class LangfuseTracer(Tracer):
 
     @contextlib.contextmanager
     def trace(
-        self, operation_name: str, tags: Optional[Dict[str, Any]] = None, parent_span: Optional[Span] = None
+        self, operation_name: str, tags: dict[str, Any] | None = None, parent_span: Span | None = None
     ) -> Iterator[Span]:
+        """Create and manage a tracing span as a context manager."""
         tags = tags or {}
         span_name = tags.get(_COMPONENT_NAME_KEY, operation_name)
         component_type = tags.get(_COMPONENT_TYPE_KEY)
+        is_root_span = not (parent_span or self.current_span())
 
         # Create a new span context
         span_context = SpanContext(
@@ -452,51 +467,97 @@ class LangfuseTracer(Tracer):
             public=self._public,
         )
 
-        # Create span using the handler
-        span = self._span_handler.create_span(span_context)
+        tracing_ctx = tracing_context_var.get({})
 
-        # Build new span hierarchy: copy existing stack, add new span, save for restoration
-        prev_stack = span_stack_var.get()
-        new_stack = (prev_stack or []).copy()
-        new_stack.append(span)
-        token = span_stack_var.set(new_stack)
-
-        span.set_tags(tags)
-
-        try:
-            yield span
-        finally:
-            # Always clean up context, even if nested operations fail
-            try:
-                # Process span data (may fail with nested pipeline exceptions)
-                self._span_handler.handle(span, component_type)
-
-                # End span (may fail if span data is corrupted)
-                raw_span = span.raw_span()
-                # In v3, we need to properly exit context managers
-                if span._context_manager is not None:
-                    span._context_manager.__exit__(None, None, None)
-                elif hasattr(raw_span, "end"):
-                    # Only call end() if it's not a context manager
-                    raw_span.end()
-            except Exception as cleanup_error:
-                # Log cleanup errors but don't let them corrupt context
-                logger.warning(
-                    "Error during span cleanup for {operation_name}: {cleanup_error}",
-                    operation_name=operation_name,
-                    cleanup_error=cleanup_error,
+        # we need to properly exit context managers
+        with contextlib.ExitStack() as stack:
+            if is_root_span:
+                # propagate_attributes sets trace_name and other trace-level metadata on the root
+                # span and ALL child spans created within this context (full trace lifetime)
+                stack.enter_context(
+                    propagate_attributes(
+                        trace_name=self._name,
+                        user_id=tracing_ctx.get("user_id") if tracing_ctx.get("user_id") is not None else None,
+                        session_id=tracing_ctx.get("session_id") if tracing_ctx.get("session_id") is not None else None,
+                        version=tracing_ctx.get("version") if tracing_ctx.get("version") is not None else None,
+                        tags=tracing_ctx.get("tags") if tracing_ctx.get("tags") is not None else None,
+                    )
                 )
+
+            # Create span using the handler
+            span = self._span_handler.create_span(span_context)
+
+            # Build new span hierarchy: copy existing stack, add new span, save for restoration
+            prev_stack = span_stack_var.get()
+            new_stack = (prev_stack or []).copy()
+            new_stack.append(span)
+            token = span_stack_var.set(new_stack)
+
+            span.set_tags(tags)
+
+            try:
+                yield span
+            except Exception:
+                # Exception occurred - capture exception info and pass to __exit__
+                # This allows Langfuse/OpenTelemetry to properly mark the span with ERROR level
+                exc_info = sys.exc_info()
+                try:
+                    # Process span data (may fail with nested pipeline exceptions)
+                    self._span_handler.handle(span, component_type)
+
+                    # End span with exception info (may fail if span data is corrupted)
+                    raw_span = span.raw_span()
+                    if span._context_manager is not None:
+                        # Pass actual exception info to mark span as failed with ERROR level
+                        span._context_manager.__exit__(*exc_info)
+                    elif hasattr(raw_span, "end"):
+                        # Only call end() if it's not a context manager
+                        raw_span.end()
+                except Exception as cleanup_error:
+                    # Log cleanup errors but don't let them corrupt context
+                    logger.warning(
+                        "Error during span cleanup for {operation_name}: {cleanup_error}",
+                        operation_name=operation_name,
+                        cleanup_error=cleanup_error,
+                    )
+
+                # Re-raise the original exception
+                raise
+            else:
+                # No exception - clean exit with success status
+                # This preserves any manually-set log levels (WARNING, DEBUG)
+                try:
+                    # Process span data
+                    self._span_handler.handle(span, component_type)
+
+                    # End span successfully
+                    raw_span = span.raw_span()
+                    # In v3, we need to properly exit context managers
+                    if span._context_manager is not None:
+                        # No exception - pass None to indicate success
+                        span._context_manager.__exit__(None, None, None)
+                    elif hasattr(raw_span, "end"):
+                        # Only call end() if it's not a context manager
+                        raw_span.end()
+                except Exception as cleanup_error:
+                    # Log cleanup errors but don't let them corrupt context
+                    logger.warning(
+                        "Error during span cleanup for {operation_name}: {cleanup_error}",
+                        operation_name=operation_name,
+                        cleanup_error=cleanup_error,
+                    )
             finally:
-                # Restore previous span stack using saved token - ensures proper cleanup
+                # Restore previous span stack using saved token
                 span_stack_var.reset(token)
 
-            if self.enforce_flush:
-                self.flush()
+                if self.enforce_flush:
+                    self.flush()
 
     def flush(self) -> None:
+        """Flush all pending spans to Langfuse."""
         self._tracer.flush()
 
-    def current_span(self) -> Optional[Span]:
+    def current_span(self) -> Span | None:
         """
         Return the current active span.
 
@@ -509,6 +570,7 @@ class LangfuseTracer(Tracer):
     def get_trace_url(self) -> str:
         """
         Return the URL to the tracing data.
+
         :return: The URL to the tracing data.
         """
         return self._tracer.get_trace_url() or ""
@@ -516,6 +578,7 @@ class LangfuseTracer(Tracer):
     def get_trace_id(self) -> str:
         """
         Return the trace ID.
+
         :return: The trace ID.
         """
         return self._tracer.get_current_trace_id() or ""

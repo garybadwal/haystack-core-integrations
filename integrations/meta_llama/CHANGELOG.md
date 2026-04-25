@@ -1,5 +1,42 @@
 # Changelog
 
+## [integrations/meta_llama-v2.2.0] - 2026-03-13
+
+### 🚀 Features
+
+- Add list of supported models for MetaLlamaChatGenerator (#2959)
+
+## [integrations/meta_llama-v2.1.0] - 2026-02-26
+
+### 🚀 Features
+
+- *(meta-llama)* Add timeout and max_retries to chat generator (#2872)
+
+### 📚 Documentation
+
+- Simplify pydoc configs (#2855)
+
+
+## [integrations/meta_llama-v2.0.0] - 2026-01-12
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+- Add pytest reruns to nightly tests for flaky tests (#2486)
+- Add reruns when running nightly tests if tests fail (#2584)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+- Remove 4 redundant Meta Llama integration tests (#2646)
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Meta_llama - drop Python 3.9 and use X|Y typing (#2712)
+
+### 🌀 Miscellaneous
+
+- Test: Update meta-llama integration test (#2503)
+- Enhancement: Adopt PEP 585 type hinting (part 4) (#2527)
+
 ## [integrations/meta_llama-v1.3.0] - 2025-10-28
 
 ### 🚀 Features

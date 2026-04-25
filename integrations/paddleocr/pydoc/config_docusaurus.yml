@@ -1,0 +1,13 @@
+loaders:
+  - modules:
+      - haystack_integrations.components.converters.paddleocr.paddleocr_vl_document_converter
+    search_path: [../src]
+processors:
+  - type: filter
+    documented_only: true
+    skip_empty_modules: true
+renderer:
+  description: PaddleOCR integration for Haystack
+  id: integrations-paddleocr
+  filename: paddleocr.md
+  title: PaddleOCR

@@ -1,8 +1,9 @@
-from typing import Any, Literal, Optional, Union, cast, get_args
+from typing import Any, Literal, TypeAlias, cast, get_args
 
 from haystack.dataclasses.chat_message import (
     ChatMessage,
     ChatRole,
+    FileContent,
     ReasoningContent,
     TextContent,
     ToolCall,
@@ -18,6 +19,8 @@ from haystack.dataclasses.streaming_chunk import (
 
 from anthropic.resources.messages.messages import RawMessageStreamEvent
 from anthropic.types import (
+    Base64PDFSourceParam,
+    DocumentBlockParam,
     ImageBlockParam,
     MessageParam,
     RedactedThinkingBlockParam,
@@ -31,7 +34,6 @@ from anthropic.types import (
 ImageFormat = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
 IMAGE_SUPPORTED_FORMATS: list[ImageFormat] = list(get_args(ImageFormat))
 
-
 # Mapping from Anthropic stop reasons to Haystack FinishReason values
 FINISH_REASON_MAPPING: dict[str, FinishReason] = {
     "end_turn": "stop",
@@ -42,19 +44,64 @@ FINISH_REASON_MAPPING: dict[str, FinishReason] = {
     "tool_use": "tool_calls",
 }
 
+AnthropicContentBlocks: TypeAlias = list[
+    ImageBlockParam
+    | DocumentBlockParam
+    | ThinkingBlockParam
+    | RedactedThinkingBlockParam
+    | ToolUseBlockParam
+    | ToolResultBlockParam
+    | TextBlockParam
+]
+
+
+def _convert_image_content_to_anthropic_format(image_content: ImageContent) -> ImageBlockParam:
+    """
+    Convert an ImageContent to the format expected by Anthropic Chat API.
+    """
+    if image_content.mime_type not in IMAGE_SUPPORTED_FORMATS:
+        supported_formats = ", ".join(IMAGE_SUPPORTED_FORMATS)
+        msg = (
+            f"Unsupported image format: {image_content.mime_type}. "
+            f"Anthropic supports the following formats: {supported_formats}"
+        )
+        raise ValueError(msg)
+
+    return ImageBlockParam(
+        type="image",
+        source={
+            "type": "base64",
+            "media_type": cast(ImageFormat, image_content.mime_type),
+            "data": image_content.base64_image,
+        },
+    )
+
+
+def _convert_file_content_to_anthropic_format(file_content: FileContent) -> DocumentBlockParam:
+    """
+    Convert a FileContent to the format expected by Anthropic Chat API.
+    """
+    if file_content.mime_type != "application/pdf":
+        msg = f"Unsupported file format: {file_content.mime_type}. Anthropic supports only PDF files."
+        raise ValueError(msg)
+
+    source = Base64PDFSourceParam(
+        type="base64",
+        media_type="application/pdf",
+        data=file_content.base64_data,
+    )
+
+    return DocumentBlockParam(
+        type="document",
+        source=source,
+        context=file_content.extra.get("context", None),
+        title=file_content.extra.get("title", None),
+    )
+
 
 def _update_anthropic_message_with_tool_call_results(
     tool_call_results: list[ToolCallResult],
-    content: list[
-        Union[
-            TextBlockParam,
-            ToolUseBlockParam,
-            ToolResultBlockParam,
-            ImageBlockParam,
-            ThinkingBlockParam,
-            RedactedThinkingBlockParam,
-        ]
-    ],
+    content: AnthropicContentBlocks,
 ) -> None:
     """
     Update an Anthropic message content list with tool call results.
@@ -67,10 +114,22 @@ def _update_anthropic_message_with_tool_call_results(
             msg = "`ToolCall` must have a non-null `id` attribute to be used with Anthropic."
             raise ValueError(msg)
 
+        tool_result_block_content: list[TextBlockParam | ImageBlockParam] = []
+        if isinstance(tool_call_result.result, str):
+            tool_result_block_content.append(TextBlockParam(type="text", text=tool_call_result.result))
+        elif isinstance(tool_call_result.result, list):
+            for item in tool_call_result.result:
+                if isinstance(item, TextContent):
+                    tool_result_block_content.append(TextBlockParam(type="text", text=item.text))
+                elif isinstance(item, ImageContent):
+                    tool_result_block_content.append(_convert_image_content_to_anthropic_format(item))
+                else:
+                    msg = "Unsupported content type in tool call result"
+                    raise ValueError(msg)
         tool_result_block = ToolResultBlockParam(
             type="tool_result",
             tool_use_id=tool_call_result.origin.id,
-            content=[{"type": "text", "text": tool_call_result.result}],
+            content=tool_result_block_content,
             is_error=tool_call_result.error,
         )
         content.append(tool_result_block)
@@ -129,16 +188,7 @@ def _convert_messages_to_anthropic_format(
             i += 1
             continue
 
-        content: list[
-            Union[
-                TextBlockParam,
-                ToolUseBlockParam,
-                ToolResultBlockParam,
-                ImageBlockParam,
-                ThinkingBlockParam,
-                RedactedThinkingBlockParam,
-            ]
-        ] = []
+        content: AnthropicContentBlocks = []
 
         # Handle multimodal content (text and images) preserving order
         for part in message._content:
@@ -166,29 +216,22 @@ def _convert_messages_to_anthropic_format(
                             content.append(reasoning_block)
 
             elif isinstance(part, ImageContent):
-                if not message.is_from(ChatRole.USER):
-                    msg = "Image content is only supported for user messages"
+                if not message.is_from(ChatRole.USER) and not message.is_from(ChatRole.TOOL):
+                    msg = "Image content is only supported for user and tool messages"
                     raise ValueError(msg)
 
-                if part.mime_type not in IMAGE_SUPPORTED_FORMATS:
-                    supported_formats = ", ".join(IMAGE_SUPPORTED_FORMATS)
-                    msg = (
-                        f"Unsupported image format: {part.mime_type}. "
-                        f"Anthropic supports the following formats: {supported_formats}"
-                    )
-                    raise ValueError(msg)
-
-                image_block = ImageBlockParam(
-                    type="image",
-                    source={
-                        "type": "base64",
-                        "media_type": cast(ImageFormat, part.mime_type),
-                        "data": part.base64_image,
-                    },
-                )
+                image_block = _convert_image_content_to_anthropic_format(part)
                 if cache_control:
                     image_block["cache_control"] = cache_control
                 content.append(image_block)
+            elif isinstance(part, FileContent):
+                if not message.is_from(ChatRole.USER):
+                    msg = "File content is only supported for user messages"
+                    raise ValueError(msg)
+                document_block = _convert_file_content_to_anthropic_format(part)
+                if cache_control:
+                    document_block["cache_control"] = cache_control
+                content.append(document_block)
 
         if message.tool_calls:
             tool_use_blocks = _convert_tool_calls_to_anthropic_format(message.tool_calls)
@@ -222,7 +265,7 @@ def _convert_messages_to_anthropic_format(
 
         # Anthropic only supports assistant and user roles in messages. User role is also used for tool messages.
         # System messages are passed separately.
-        role: Union[Literal["assistant"], Literal["user"]] = "user"
+        role: Literal["assistant"] | Literal["user"] = "user"
         if message._role == ChatRole.ASSISTANT:
             role = "assistant"
 
@@ -314,6 +357,7 @@ def _convert_anthropic_chunk_to_streaming_chunk(
     """
     content = ""
     tool_calls = []
+    reasoning = None
     start = False
     finish_reason = None
     index = getattr(chunk, "index", None)
@@ -333,6 +377,12 @@ def _convert_anthropic_chunk_to_streaming_chunk(
                     tool_name=chunk.content_block.name,
                 )
             )
+        elif chunk.content_block.type == "thinking":
+            reasoning = ReasoningContent(reasoning_text="")
+        elif chunk.content_block.type == "redacted_thinking":
+            reasoning = ReasoningContent(
+                reasoning_text="", extra={"redacted_thinking": getattr(chunk.content_block, "data", "")}
+            )
 
     # delta of a content block
     elif chunk.type == "content_block_delta":
@@ -340,6 +390,10 @@ def _convert_anthropic_chunk_to_streaming_chunk(
             content = chunk.delta.text
         elif chunk.delta.type == "input_json_delta":
             tool_calls.append(ToolCallDelta(index=tool_call_index, arguments=chunk.delta.partial_json))
+        elif chunk.delta.type == "thinking_delta":
+            reasoning = ReasoningContent(reasoning_text=chunk.delta.thinking)
+        elif chunk.delta.type == "signature_delta":
+            reasoning = ReasoningContent(reasoning_text="", extra={"signature": chunk.delta.signature})
 
     # end of streaming message
     elif chunk.type == "message_delta":
@@ -354,83 +408,72 @@ def _convert_anthropic_chunk_to_streaming_chunk(
         start=start,
         finish_reason=finish_reason,
         tool_calls=tool_calls if tool_calls else None,
+        reasoning=reasoning,
         meta=meta,
     )
 
 
-def _process_reasoning_contents(chunks: list[StreamingChunk]) -> Optional[ReasoningContent]:
+def _process_reasoning_contents(chunks: list[StreamingChunk]) -> ReasoningContent | None:
     """
     Process reasoning contents from a list of StreamingChunk objects into the Anthropic expected format.
 
-    :param chunks: List of StreamingChunk objects potentially containing reasoning contents.
+    Reads reasoning data from the dedicated StreamingChunk.reasoning field.
 
-    :returns: List of Anthropic formatted reasoning content dictionaries
+    :param chunks: List of StreamingChunk objects potentially containing reasoning contents.
+    :returns: A ReasoningContent object combining all reasoning chunks, or None if no reasoning was found.
     """
-    formatted_reasoning_contents = []
+    formatted_reasoning_contents: list[dict[str, Any]] = []
     current_index = None
     content_block_text = ""
     content_block_signature = None
     content_block_redacted_thinking = None
-    content_block_index = None
 
     for chunk in chunks:
-        if (delta := chunk.meta.get("delta")) is not None:
-            if delta.get("type") == "thinking_delta" and delta.get("thinking") is not None:
-                content_block_index = chunk.meta.get("index", None)
-        if (content_block := chunk.meta.get("content_block")) is not None and content_block.get(
-            "type"
-        ) == "redacted_thinking":
-            content_block_index = chunk.meta.get("index", None)
+        if chunk.reasoning is None:
+            continue
+
+        # Only thinking text or redacted thinking trigger grouping. Signatures are metadata only
+        has_thinking_text = bool(chunk.reasoning.reasoning_text)
+        has_redacted_thinking = chunk.reasoning.extra.get("redacted_thinking") is not None
+
+        if not (has_thinking_text or has_redacted_thinking):
+            # This is a signature-only chunk. Accumulate it but don't start a new group.
+            if chunk.reasoning.extra.get("signature") is not None:
+                content_block_signature = chunk.reasoning.extra["signature"]
+            continue
 
         # Start new group when index changes
-        if current_index is not None and content_block_index != current_index:
-            # Finalize current group
-            if content_block_text:
-                formatted_reasoning_contents.append(
-                    {
-                        "reasoning_content": {
-                            "reasoning_text": {"text": content_block_text, "signature": content_block_signature},
-                        }
-                    }
-                )
-            if content_block_redacted_thinking:
-                formatted_reasoning_contents.append(
-                    {"reasoning_content": {"redacted_thinking": content_block_redacted_thinking}}
-                )
-
-            # Reset accumulators for new group
+        if current_index is not None and chunk.index != current_index:
+            _finalize_reasoning_group(
+                formatted_reasoning_contents,
+                content_block_text,
+                content_block_signature,
+                content_block_redacted_thinking,
+            )
             content_block_text = ""
             content_block_signature = None
             content_block_redacted_thinking = None
 
-        # Accumulate content for current index
-        current_index = content_block_index
-        if (delta := chunk.meta.get("delta")) is not None:
-            if delta.get("type") == "thinking_delta" and delta.get("thinking") is not None:
-                content_block_text += delta.get("thinking", "")
-            if delta.get("type") == "signature_delta" and delta.get("signature") is not None:
-                content_block_signature = delta.get("signature", "")
-        if (content_block := chunk.meta.get("content_block")) is not None and content_block.get(
-            "type"
-        ) == "redacted_thinking":
-            content_block_redacted_thinking = content_block.get("data", "")
+        current_index = chunk.index
+
+        # Accumulate reasoning content
+        if chunk.reasoning.reasoning_text:
+            content_block_text += chunk.reasoning.reasoning_text
+        if chunk.reasoning.extra.get("signature") is not None:
+            content_block_signature = chunk.reasoning.extra["signature"]
+        if chunk.reasoning.extra.get("redacted_thinking") is not None:
+            content_block_redacted_thinking = chunk.reasoning.extra["redacted_thinking"]
 
     # Finalize the last group
     if current_index is not None:
-        if content_block_text:
-            formatted_reasoning_contents.append(
-                {
-                    "reasoning_content": {
-                        "reasoning_text": {"text": content_block_text, "signature": content_block_signature},
-                    }
-                }
-            )
-        if content_block_redacted_thinking:
-            formatted_reasoning_contents.append(
-                {"reasoning_content": {"redacted_thinking": content_block_redacted_thinking}}
-            )
+        _finalize_reasoning_group(
+            formatted_reasoning_contents,
+            content_block_text,
+            content_block_signature,
+            content_block_redacted_thinking,
+        )
 
-    # Combine all reasoning texts into a single string for the main reasoning_text field
+    # Combine all reasoning texts
     final_reasoning_text = ""
     for content in formatted_reasoning_contents:
         if "reasoning_text" in content["reasoning_content"]:
@@ -446,3 +489,31 @@ def _process_reasoning_contents(chunks: list[StreamingChunk]) -> Optional[Reason
         if formatted_reasoning_contents
         else None
     )
+
+
+def _finalize_reasoning_group(
+    formatted_reasoning_contents: list[dict[str, Any]],
+    content_block_text: str,
+    content_block_signature: str | None,
+    content_block_redacted_thinking: str | None,
+) -> None:
+    """
+    Finalize a reasoning content group and append it to the formatted list.
+
+    :param formatted_reasoning_contents: The list to append the finalized reasoning content to.
+    :param content_block_text: The accumulated reasoning text for the current group.
+    :param content_block_signature: The signature for the current reasoning group, if any.
+    :param content_block_redacted_thinking: The redacted thinking data for the current group, if any.
+    """
+    if content_block_text:
+        formatted_reasoning_contents.append(
+            {
+                "reasoning_content": {
+                    "reasoning_text": {"text": content_block_text, "signature": content_block_signature},
+                }
+            }
+        )
+    if content_block_redacted_thinking:
+        formatted_reasoning_contents.append(
+            {"reasoning_content": {"redacted_thinking": content_block_redacted_thinking}}
+        )

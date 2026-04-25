@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from haystack import component, logging
 from haystack.dataclasses import ChatMessage, StreamingCallbackT
@@ -38,7 +38,7 @@ class WatsonxGenerator(WatsonxChatGenerator):
 
     generator = WatsonxGenerator(
         api_key=Secret.from_env_var("WATSONX_API_KEY"),
-        model="ibm/granite-13b-chat-v2",
+        model="ibm/granite-4-h-small",
         project_id=Secret.from_env_var("WATSONX_PROJECT_ID"),
     )
 
@@ -54,7 +54,7 @@ class WatsonxGenerator(WatsonxChatGenerator):
         "replies": ["Quantum computing uses quantum-mechanical phenomena like...."],
         "meta": [
             {
-                "model": "ibm/granite-13b-chat-v2",
+                "model": "ibm/granite-4-h-small",
                 "project_id": "your-project-id",
                 "usage": {
                     "prompt_tokens": 12,
@@ -67,11 +67,36 @@ class WatsonxGenerator(WatsonxChatGenerator):
     ```
     """
 
+    SUPPORTED_MODELS: ClassVar[list[str]] = [
+        "ibm/granite-3-1-8b-base",
+        "ibm/granite-3-8b-instruct",
+        "ibm/granite-4-h-small",
+        "ibm/granite-8b-code-instruct",
+        "ibm/granite-guardian-3-8b",
+        "meta-llama/llama-3-1-70b-gptq",
+        "meta-llama/llama-3-1-8b",
+        "meta-llama/llama-3-2-11b-vision-instruct",
+        "meta-llama/llama-3-2-90b-vision-instruct",
+        "meta-llama/llama-3-3-70b-instruct",
+        "meta-llama/llama-3-405b-instruct",
+        "meta-llama/llama-4-maverick-17b-128e-instruct-fp8",
+        "meta-llama/llama-guard-3-11b-vision",
+        "mistral-large-2512",
+        "mistralai/mistral-medium-2505",
+        "mistralai/mistral-small-3-1-24b-instruct-2503",
+        "openai/gpt-oss-120b",
+    ]
+    """A non-exhaustive list of models supported by this component.
+
+    See https://www.ibm.com/docs/en/watsonx/saas?topic=solutions-supported-foundation-models for the
+    full list of models and up-to-date model IDs.
+    """
+
     def __init__(
         self,
         *,
         api_key: Secret = Secret.from_env_var("WATSONX_API_KEY"),  # noqa: B008
-        model: str = "ibm/granite-3-3-8b-instruct",
+        model: str = "ibm/granite-4-h-small",
         project_id: Secret = Secret.from_env_var("WATSONX_PROJECT_ID"),  # noqa: B008
         api_base_url: str = "https://us-south.ml.cloud.ibm.com",
         system_prompt: str | None = None,
@@ -90,7 +115,7 @@ class WatsonxGenerator(WatsonxChatGenerator):
 
         :param api_key: IBM Cloud API key for watsonx.ai access.
             Can be set via `WATSONX_API_KEY` environment variable or passed directly.
-        :param model: The model ID to use for completions. Defaults to "ibm/granite-13b-chat-v2".
+        :param model: The model ID to use for completions. Defaults to "ibm/granite-4-h-small".
             Available models can be found in your IBM Cloud account.
         :param project_id: IBM Cloud project ID
         :param api_base_url: Custom base URL for the API endpoint.

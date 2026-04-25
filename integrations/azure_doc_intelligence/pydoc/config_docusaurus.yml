@@ -1,0 +1,13 @@
+loaders:
+  - modules:
+      - haystack_integrations.components.converters.azure_doc_intelligence.converter
+    search_path: [../src]
+processors:
+  - type: filter
+    documented_only: true
+    skip_empty_modules: true
+renderer:
+  description: Azure Document Intelligence integration for Haystack
+  id: integrations-azure_doc_intelligence
+  filename: azure_doc_intelligence.md
+  title: Azure Document Intelligence

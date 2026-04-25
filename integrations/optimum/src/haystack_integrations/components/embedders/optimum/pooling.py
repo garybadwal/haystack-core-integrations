@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from enum import Enum
 
 
@@ -28,7 +32,7 @@ class OptimumEmbedderPooling(Enum):
     #: Perform Last Token Pooling on the output of the embedding model.
     LAST_TOKEN = "last_token"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.value
 
     @classmethod

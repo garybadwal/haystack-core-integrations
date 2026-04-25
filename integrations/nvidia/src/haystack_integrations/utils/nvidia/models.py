@@ -1,5 +1,9 @@
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from dataclasses import dataclass
-from typing import Literal, Optional, Union
+from typing import Literal
 
 from .client import Client
 
@@ -20,18 +24,19 @@ class Model:
     """
 
     id: str
-    model_type: Optional[Literal["chat", "embedding", "ranking"]] = None
-    client: Optional[Union[Client, str]] = None
-    endpoint: Optional[str] = None
-    aliases: Optional[list] = None
-    base_model: Optional[str] = None
-    supports_tools: Optional[bool] = False
-    supports_structured_output: Optional[bool] = False
+    model_type: Literal["chat", "embedding", "ranking"] | None = None
+    client: Client | str | None = None
+    endpoint: str | None = None
+    aliases: list | None = None
+    base_model: str | None = None
+    supports_tools: bool | None = False
+    supports_structured_output: bool | None = False
 
     def __hash__(self) -> int:
         return hash(self.id)
 
-    def validate(self):
+    def validate(self) -> int:
+        """Validate the model against the backend and return a sort key."""
         if self.client:
             client = self.client if isinstance(self.client, Client) else Client.from_str(self.client)
             supported = {
@@ -476,7 +481,7 @@ RANKING_MODEL_TABLE = {
 
 DEFAULT_MODELS = {
     "embedding": "nvidia/nv-embedqa-e5-v5",
-    "ranking": "nvidia/nv-rerankqa-mistral-4b-v3",
+    "ranking": "nv-rerank-qa-mistral-4b:1",
     "chat": "meta/llama3-8b-instruct",
 }
 

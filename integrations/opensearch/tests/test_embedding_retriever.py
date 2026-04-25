@@ -72,10 +72,14 @@ def test_to_dict(_mock_opensearch_client):
                     },
                     "return_embedding": False,
                     "create_index": True,
-                    "http_auth": None,
+                    "http_auth": [
+                        {"type": "env_var", "env_vars": ["OPENSEARCH_USERNAME"], "strict": False},
+                        {"type": "env_var", "env_vars": ["OPENSEARCH_PASSWORD"], "strict": False},
+                    ],
                     "use_ssl": None,
                     "verify_certs": None,
                     "timeout": None,
+                    "nested_fields": None,
                 },
                 "type": "haystack_integrations.document_stores.opensearch.document_store.OpenSearchDocumentStore",
             },
@@ -85,6 +89,7 @@ def test_to_dict(_mock_opensearch_client):
             "custom_query": {"some": "custom query"},
             "raise_on_failure": True,
             "efficient_filtering": False,
+            "search_kwargs": None,
         },
     }
 
@@ -145,6 +150,7 @@ def test_run():
         top_k=10,
         custom_query=None,
         efficient_filtering=False,
+        search_kwargs=None,
     )
     assert len(res) == 1
     assert len(res["documents"]) == 1
@@ -164,6 +170,7 @@ async def test_run_async():
         top_k=10,
         custom_query=None,
         efficient_filtering=False,
+        search_kwargs=None,
     )
     assert len(res) == 1
     assert len(res["documents"]) == 1
@@ -180,6 +187,7 @@ def test_run_init_params():
         top_k=11,
         custom_query="custom_query",
         efficient_filtering=True,
+        search_kwargs={"k": 10},
     )
     res = retriever.run(query_embedding=[0.5, 0.7])
     mock_store._embedding_retrieval.assert_called_once_with(
@@ -188,6 +196,7 @@ def test_run_init_params():
         top_k=11,
         custom_query="custom_query",
         efficient_filtering=True,
+        search_kwargs={"k": 10},
     )
     assert len(res) == 1
     assert len(res["documents"]) == 1
@@ -204,6 +213,7 @@ async def test_run_async_init_params():
         filters={"from": "init"},
         top_k=11,
         custom_query="custom_query",
+        search_kwargs={"k": 10},
     )
     res = await retriever.run_async(query_embedding=[0.5, 0.7])
     mock_store._embedding_retrieval_async.assert_called_once_with(
@@ -212,6 +222,7 @@ async def test_run_async_init_params():
         top_k=11,
         custom_query="custom_query",
         efficient_filtering=False,
+        search_kwargs={"k": 10},
     )
     assert len(res) == 1
     assert len(res["documents"]) == 1
@@ -222,14 +233,19 @@ async def test_run_async_init_params():
 def test_run_time_params():
     mock_store = Mock(spec=OpenSearchDocumentStore)
     mock_store._embedding_retrieval.return_value = [Document(content="Test doc", embedding=[0.1, 0.2])]
-    retriever = OpenSearchEmbeddingRetriever(document_store=mock_store, filters={"from": "init"}, top_k=11)
-    res = retriever.run(query_embedding=[0.5, 0.7], filters={"from": "run"}, top_k=9, efficient_filtering=True)
+    retriever = OpenSearchEmbeddingRetriever(
+        document_store=mock_store, filters={"from": "init"}, top_k=11, search_kwargs={"k": 10}
+    )
+    res = retriever.run(
+        query_embedding=[0.5, 0.7], filters={"from": "run"}, top_k=9, efficient_filtering=True, search_kwargs={"k": 9}
+    )
     mock_store._embedding_retrieval.assert_called_once_with(
         query_embedding=[0.5, 0.7],
         filters={"from": "run"},
         top_k=9,
         custom_query=None,
         efficient_filtering=True,
+        search_kwargs={"k": 9},
     )
     assert len(res) == 1
     assert len(res["documents"]) == 1
@@ -249,6 +265,7 @@ async def test_run_async_time_params():
         top_k=9,
         custom_query=None,
         efficient_filtering=False,
+        search_kwargs=None,
     )
     assert len(res) == 1
     assert len(res["documents"]) == 1
@@ -264,6 +281,22 @@ def test_run_ignore_errors(caplog):
     assert len(res) == 1
     assert res["documents"] == []
     assert "Some error" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_run_async_ignore_errors(caplog):
+    mock_store = Mock(spec=OpenSearchDocumentStore)
+    mock_store._embedding_retrieval_async.side_effect = Exception("Some error")
+    retriever = OpenSearchEmbeddingRetriever(document_store=mock_store, raise_on_failure=False)
+    res = await retriever.run_async(query_embedding=[0.5, 0.7])
+    assert len(res) == 1
+    assert res["documents"] == []
+    assert "Some error" in caplog.text
+
+
+def test_init_raises_on_invalid_document_store():
+    with pytest.raises(ValueError, match="document_store must be an instance of OpenSearchDocumentStore"):
+        OpenSearchEmbeddingRetriever(document_store="not a document store")
 
 
 def test_run_with_runtime_document_store():
@@ -288,6 +321,7 @@ def test_run_with_runtime_document_store():
         top_k=10,
         custom_query=None,
         efficient_filtering=False,
+        search_kwargs=None,
     )
     initial_store._embedding_retrieval.assert_not_called()
 
@@ -325,6 +359,7 @@ async def test_run_async_with_runtime_document_store():
         top_k=10,
         custom_query=None,
         efficient_filtering=False,
+        search_kwargs=None,
     )
     initial_store._embedding_retrieval_async.assert_not_called()
 
@@ -404,3 +439,51 @@ async def test_embedding_retriever_runtime_document_store_switching_async(
     python_query_embedding = [0.4, 0.4, 0.4] + [0.0] * 765
     results_1_again = await retriever.run_async(query_embedding=python_query_embedding)
     assert "Python" in results_1_again["documents"][0].content
+
+
+@pytest.mark.integration
+def test_embedding_retriever_document_structure_with_metadata(document_store, test_documents_with_embeddings_1):
+    """
+    Test that documents returned by embedding retriever have correct structure:
+    - Metadata fields are in doc.meta (not at top level)
+    - Special fields (content, embedding, id, score) are at top level
+    - All original metadata is preserved
+    """
+    document_store.write_documents(test_documents_with_embeddings_1, refresh=True)
+    retriever = OpenSearchEmbeddingRetriever(document_store=document_store)
+
+    # Query embedding to match functional programming languages
+    query_embedding = [0.2, 0.3, 0.4] + [0.0] * 765
+    results = retriever.run(query_embedding=query_embedding, top_k=5)
+
+    assert len(results["documents"]) > 0
+
+    for doc in results["documents"]:
+        # Verify special fields are at top level
+        assert hasattr(doc, "content")
+        assert isinstance(doc.content, str)
+        assert hasattr(doc, "id")
+        assert isinstance(doc.id, str)
+        assert hasattr(doc, "score")
+        assert doc.score is not None
+        assert hasattr(doc, "embedding")
+        assert isinstance(doc.embedding, list)
+        assert len(doc.embedding) == 768
+
+        # Verify metadata fields are in meta dict (not at top level)
+        assert hasattr(doc, "meta")
+        assert isinstance(doc.meta, dict)
+
+        # Verify original metadata is preserved
+        assert "likes" in doc.meta
+        assert "language_type" in doc.meta
+        assert isinstance(doc.meta["likes"], int)
+        assert isinstance(doc.meta["language_type"], str)
+
+        # Verify document can be serialized/deserialized
+        doc_dict = doc.to_dict()
+        doc_from_dict = Document.from_dict(doc_dict)
+        assert doc_from_dict.content == doc.content
+        assert doc_from_dict.meta == doc.meta
+        assert doc_from_dict.id == doc.id
+        assert doc_from_dict.embedding == doc.embedding

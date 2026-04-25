@@ -15,11 +15,18 @@ COHERE_API_URL = "https://api.cohere.com"
 
 
 class TestCohereDocumentEmbedder:
+    def test_supported_models(self) -> None:
+        """SUPPORTED_MODELS is a non-empty list of strings."""
+        models = CohereDocumentEmbedder.SUPPORTED_MODELS
+        assert isinstance(models, list)
+        assert len(models) > 0
+        assert all(isinstance(m, str) for m in models)
+
     def test_init_default(self, monkeypatch):
         monkeypatch.setenv("COHERE_API_KEY", "test-api-key")
         embedder = CohereDocumentEmbedder()
         assert embedder.api_key == Secret.from_env_var(["COHERE_API_KEY", "CO_API_KEY"])
-        assert embedder.model == "embed-english-v2.0"
+        assert embedder.model == "embed-v4.0"
         assert embedder.input_type == "search_document"
         assert embedder.api_base_url == COHERE_API_URL
         assert embedder.truncate == "END"
@@ -63,7 +70,7 @@ class TestCohereDocumentEmbedder:
             "type": "haystack_integrations.components.embedders.cohere.document_embedder.CohereDocumentEmbedder",
             "init_parameters": {
                 "api_key": {"env_vars": ["COHERE_API_KEY", "CO_API_KEY"], "strict": True, "type": "env_var"},
-                "model": "embed-english-v2.0",
+                "model": "embed-v4.0",
                 "input_type": "search_document",
                 "api_base_url": COHERE_API_URL,
                 "truncate": "END",
@@ -115,7 +122,7 @@ class TestCohereDocumentEmbedder:
             "type": "haystack_integrations.components.embedders.cohere.document_embedder.CohereDocumentEmbedder",
             "init_parameters": {
                 "api_key": {"env_vars": ["COHERE_API_KEY", "CO_API_KEY"], "strict": True, "type": "env_var"},
-                "model": "embed-english-v2.0",
+                "model": "embed-v4.0",
                 "input_type": "search_document",
                 "api_base_url": COHERE_API_URL,
                 "truncate": "END",
@@ -130,7 +137,7 @@ class TestCohereDocumentEmbedder:
         }
         embedder = CohereDocumentEmbedder.from_dict(component_dict)
         assert embedder.api_key == Secret.from_env_var(["COHERE_API_KEY", "CO_API_KEY"])
-        assert embedder.model == "embed-english-v2.0"
+        assert embedder.model == "embed-v4.0"
         assert embedder.input_type == "search_document"
         assert embedder.api_base_url == COHERE_API_URL
         assert embedder.truncate == "END"
@@ -168,7 +175,7 @@ class TestCohereDocumentEmbedder:
 
         assert result["meta"] == {"api_version": "1.0"}
 
-        for doc, doc_with_embedding, embedding in zip(docs, result["documents"], embeddings):
+        for doc, doc_with_embedding, embedding in zip(docs, result["documents"], embeddings, strict=True):
             assert doc_with_embedding.content == doc.content
             assert doc_with_embedding.meta == doc.meta
             assert doc_with_embedding.embedding == embedding
@@ -190,9 +197,54 @@ class TestCohereDocumentEmbedder:
 
         assert result["meta"] == {"api_version": "1.0"}
 
-        for doc, doc_with_embedding, embedding in zip(docs, result["documents"], embeddings):
+        for doc, doc_with_embedding, embedding in zip(docs, result["documents"], embeddings, strict=True):
             assert doc_with_embedding.content == doc.content
             assert doc_with_embedding.meta == doc.meta
+            assert doc_with_embedding.embedding == embedding
+
+    @patch("haystack_integrations.components.embedders.cohere.document_embedder.get_response")
+    def test_run_does_not_modify_original_documents(self, mock_get_response):
+        embedder = CohereDocumentEmbedder(api_key=Secret.from_token("test-api-key"))
+
+        embeddings = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+        mock_get_response.return_value = (embeddings, {"api_version": "1.0"})
+
+        docs = [
+            Document(content="I love cheese", meta={"topic": "Cuisine"}),
+            Document(content="A transformer is a deep learning architecture", meta={"topic": "ML"}),
+        ]
+
+        result = embedder.run(docs)
+
+        # Check that the original documents are not modified
+        for doc in docs:
+            assert doc.embedding is None
+
+        # Check that the returned documents have embeddings
+        for doc_with_embedding, embedding in zip(result["documents"], embeddings, strict=True):
+            assert doc_with_embedding.embedding == embedding
+
+    @pytest.mark.asyncio
+    @patch("haystack_integrations.components.embedders.cohere.document_embedder.get_async_response")
+    async def test_run_async_does_not_modify_original_documents(self, mock_get_response):
+        embedder = CohereDocumentEmbedder(api_key=Secret.from_token("test-api-key"))
+
+        embeddings = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+        mock_get_response.return_value = (embeddings, {"api_version": "1.0"})
+
+        docs = [
+            Document(content="I love cheese", meta={"topic": "Cuisine"}),
+            Document(content="A transformer is a deep learning architecture", meta={"topic": "ML"}),
+        ]
+
+        result = await embedder.run_async(docs)
+
+        # Check that the original documents are not modified
+        for doc in docs:
+            assert doc.embedding is None
+
+        # Check that the returned documents have embeddings
+        for doc_with_embedding, embedding in zip(result["documents"], embeddings, strict=True):
             assert doc_with_embedding.embedding == embedding
 
     @pytest.mark.skipif(
@@ -201,7 +253,7 @@ class TestCohereDocumentEmbedder:
     )
     @pytest.mark.integration
     def test_live_run(self):
-        embedder = CohereDocumentEmbedder(model="embed-english-v2.0", embedding_type=EmbeddingTypes.FLOAT)
+        embedder = CohereDocumentEmbedder(model="embed-v4.0", embedding_type=EmbeddingTypes.FLOAT)
 
         docs = [
             Document(content="I love cheese", meta={"topic": "Cuisine"}),
@@ -224,7 +276,7 @@ class TestCohereDocumentEmbedder:
     )
     @pytest.mark.integration
     async def test_live_run_async(self):
-        embedder = CohereDocumentEmbedder(model="embed-english-v2.0", embedding_type=EmbeddingTypes.FLOAT)
+        embedder = CohereDocumentEmbedder(model="embed-v4.0", embedding_type=EmbeddingTypes.FLOAT)
 
         docs = [
             Document(content="I love cheese", meta={"topic": "Cuisine"}),

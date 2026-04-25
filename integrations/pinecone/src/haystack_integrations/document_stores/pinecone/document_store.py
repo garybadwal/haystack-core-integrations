@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
+
 from copy import copy
-from typing import Any, Dict, List, Literal, Optional, Union
+from dataclasses import replace
+from typing import Any, Literal
 
 from haystack import default_from_dict, default_to_dict, logging
 from haystack.dataclasses import Document
@@ -40,11 +42,13 @@ class PineconeDocumentStore:
         namespace: str = "default",
         batch_size: int = 100,
         dimension: int = 768,
-        spec: Optional[Dict[str, Any]] = None,
+        spec: dict[str, Any] | None = None,
         metric: Literal["cosine", "euclidean", "dotproduct"] = "cosine",
-    ):
+        show_progress: bool = True,
+    ) -> None:
         """
         Creates a new PineconeDocumentStore instance.
+
         It is meant to be connected to a Pinecone index and namespace.
 
         :param api_key: The Pinecone API key.
@@ -61,6 +65,8 @@ class PineconeDocumentStore:
             If not provided, a default spec with serverless deployment in the `us-east-1` region will be used
             (compatible with the free tier).
         :param metric: The metric to use for similarity search. This parameter is only used when creating a new index.
+        :param show_progress: Whether to show a progress bar when upserting documents. Set to False to disable
+            (e.g. in tests or scripts where quiet output is preferred).
 
         """
         self.api_key = api_key
@@ -71,14 +77,15 @@ class PineconeDocumentStore:
         self.spec = spec
         self.dimension = dimension
         self.index_name = index
+        self.show_progress = show_progress
 
-        self._index: Optional[_Index] = None
-        self._async_index: Optional[_IndexAsyncio] = None
+        self._index: _Index | None = None
+        self._async_index: _IndexAsyncio | None = None
         self._dummy_vector = [-10.0] * self.dimension
 
-    def _initialize_index(self):
+    def _initialize_index(self) -> None:
         if self._index is not None:
-            return self._index
+            return
 
         client = Pinecone(api_key=self.api_key.resolve_value(), source_tag="haystack")
 
@@ -103,9 +110,9 @@ class PineconeDocumentStore:
         self.dimension = actual_dimension or self.dimension
         self._dummy_vector = [-10.0] * self.dimension
 
-    async def _initialize_async_index(self):
+    async def _initialize_async_index(self) -> None:
         if self._async_index is not None:
-            return self._async_index
+            return
 
         async_client = PineconeAsyncio(api_key=self.api_key.resolve_value(), source_tag="haystack")
 
@@ -138,7 +145,7 @@ class PineconeDocumentStore:
 
         await async_client.close()
 
-    def close(self):
+    def close(self) -> None:
         """
         Close the associated synchronous resources.
         """
@@ -146,7 +153,7 @@ class PineconeDocumentStore:
             self._index.close()
             self._index = None
 
-    async def close_async(self):
+    async def close_async(self) -> None:
         """
         Close the associated asynchronous resources. To be invoked manually when the Document Store is no longer needed.
         """
@@ -155,7 +162,7 @@ class PineconeDocumentStore:
             self._async_index = None
 
     @staticmethod
-    def _convert_dict_spec_to_pinecone_object(spec: Dict[str, Any]) -> Union[ServerlessSpec, PodSpec]:
+    def _convert_dict_spec_to_pinecone_object(spec: dict[str, Any]) -> ServerlessSpec | PodSpec:
         """Convert the spec dictionary to a Pinecone spec object"""
 
         if "serverless" in spec:
@@ -172,9 +179,10 @@ class PineconeDocumentStore:
         raise ValueError(msg)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PineconeDocumentStore":
+    def from_dict(cls, data: dict[str, Any]) -> "PineconeDocumentStore":
         """
         Deserializes the component from a dictionary.
+
         :param data:
             Dictionary to deserialize from.
         :returns:
@@ -183,9 +191,10 @@ class PineconeDocumentStore:
         deserialize_secrets_inplace(data["init_parameters"], keys=["api_key"])
         return default_from_dict(cls, data)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
+
         :returns:
             Dictionary with serialized data.
         """
@@ -198,6 +207,7 @@ class PineconeDocumentStore:
             namespace=self.namespace,
             batch_size=self.batch_size,
             metric=self.metric,
+            show_progress=self.show_progress,
         )
 
     def count_documents(self) -> int:
@@ -227,7 +237,7 @@ class PineconeDocumentStore:
             count = 0
         return count
 
-    def write_documents(self, documents: List[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE) -> int:
+    def write_documents(self, documents: list[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE) -> int:
         """
         Writes Documents to Pinecone.
 
@@ -243,14 +253,17 @@ class PineconeDocumentStore:
         documents_for_pinecone = self._prepare_documents_for_writing(documents, policy)
 
         result = self._index.upsert(
-            vectors=documents_for_pinecone, namespace=self.namespace, batch_size=self.batch_size
+            vectors=documents_for_pinecone,
+            namespace=self.namespace,
+            batch_size=self.batch_size,
+            show_progress=self.show_progress,
         )
 
-        written_docs = result["upserted_count"]
-        return written_docs
+        # if the operation is successful, result will have the upserted_count attribute
+        return result.upserted_count  # type: ignore[union-attr]
 
     async def write_documents_async(
-        self, documents: List[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE
+        self, documents: list[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE
     ) -> int:
         """
         Asynchronously writes Documents to Pinecone.
@@ -267,19 +280,21 @@ class PineconeDocumentStore:
         documents_for_pinecone = self._prepare_documents_for_writing(documents, policy)
 
         result = await self._async_index.upsert(
-            vectors=documents_for_pinecone, namespace=self.namespace, batch_size=self.batch_size
+            vectors=documents_for_pinecone,
+            namespace=self.namespace,
+            batch_size=self.batch_size,
+            show_progress=self.show_progress,
         )
 
-        written_docs = result["upserted_count"]
+        # if the operation is successful, result will have the upserted_count attribute
+        return result.upserted_count  # type: ignore[union-attr]
 
-        return written_docs
-
-    def filter_documents(self, filters: Optional[Dict[str, Any]] = None) -> List[Document]:
+    def filter_documents(self, filters: dict[str, Any] | None = None) -> list[Document]:
         """
         Returns the documents that match the filters provided.
 
         For a detailed specification of the filters,
-        refer to the [documentation](https://docs.haystack.deepset.ai/v2.0/docs/metadata-filtering)
+        refer to the [documentation](https://docs.haystack.deepset.ai/docs/metadata-filtering)
 
         :param filters: The filters to apply to the document list.
         :returns: A list of Documents that match the given filters.
@@ -296,8 +311,7 @@ class PineconeDocumentStore:
 
         # when simply filtering, we don't want to return any scores
         # furthermore, we are querying with a dummy vector, so the scores are meaningless
-        for doc in documents:
-            doc.score = None
+        documents = [replace(doc, score=None) for doc in documents]
 
         if len(documents) == TOP_K_LIMIT:
             logger.warning(
@@ -306,7 +320,7 @@ class PineconeDocumentStore:
             )
         return documents
 
-    async def filter_documents_async(self, filters: Optional[Dict[str, Any]] = None) -> List[Document]:
+    async def filter_documents_async(self, filters: dict[str, Any] | None = None) -> list[Document]:
         """
         Asynchronously returns the documents that match the filters provided.
 
@@ -322,8 +336,7 @@ class PineconeDocumentStore:
             query_embedding=self._dummy_vector, filters=filters, top_k=TOP_K_LIMIT
         )
 
-        for doc in documents:
-            doc.score = None
+        documents = [replace(doc, score=None) for doc in documents]
 
         if len(documents) == TOP_K_LIMIT:
             logger.warning(
@@ -333,7 +346,7 @@ class PineconeDocumentStore:
 
         return documents
 
-    def delete_documents(self, document_ids: List[str]) -> None:
+    def delete_documents(self, document_ids: list[str]) -> None:
         """
         Deletes documents that match the provided `document_ids` from the document store.
 
@@ -343,7 +356,7 @@ class PineconeDocumentStore:
         assert self._index is not None, "Index is not initialized"
         self._index.delete(ids=document_ids, namespace=self.namespace)
 
-    async def delete_documents_async(self, document_ids: List[str]) -> None:
+    async def delete_documents_async(self, document_ids: list[str]) -> None:
         """
         Asynchronously deletes documents that match the provided `document_ids` from the document store.
 
@@ -377,14 +390,171 @@ class PineconeDocumentStore:
             # Namespace doesn't exist (empty collection), which is fine - nothing to delete
             logger.debug("Namespace '{namespace}' not found. Nothing to delete.", namespace=self.namespace or "default")
 
+    @staticmethod
+    def _update_documents_metadata(documents: list[Document], meta: dict[str, Any]) -> None:
+        """
+        Updates metadata for a list of documents by merging the provided meta dictionary.
+
+        :param documents: List of documents to update.
+        :param meta: Metadata fields to merge into each document's existing metadata.
+        """
+        for i, document in enumerate(documents):
+            documents[i] = replace(document, meta={**(document.meta or {}), **meta})
+
+    def delete_by_filter(self, filters: dict[str, Any]) -> int:
+        """
+        Deletes all documents that match the provided filters.
+
+        Pinecone does not support server-side delete by filter, so this method
+        first searches for matching documents, then deletes them by ID.
+
+        :param filters: The filters to apply to select documents for deletion.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :returns: The number of documents deleted.
+        """
+        _validate_filters(filters)
+
+        self._initialize_index()
+        assert self._index is not None, "Index is not initialized"
+
+        documents = self.filter_documents(filters=filters)
+        if not documents:
+            return 0
+
+        document_ids = [doc.id for doc in documents]
+
+        self.delete_documents(document_ids)
+
+        deleted_count = len(document_ids)
+        logger.info(
+            "Deleted {n_docs} documents from index '{index}' using filters.",
+            n_docs=deleted_count,
+            index=self.index_name,
+        )
+
+        return deleted_count
+
+    async def delete_by_filter_async(self, filters: dict[str, Any]) -> int:
+        """
+        Asynchronously deletes all documents that match the provided filters.
+
+        Pinecone does not support server-side delete by filter, so this method
+        first searches for matching documents, then deletes them by ID.
+
+        :param filters: The filters to apply to select documents for deletion.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :returns: The number of documents deleted.
+        """
+        _validate_filters(filters)
+
+        await self._initialize_async_index()
+        assert self._async_index is not None, "Index is not initialized"
+
+        documents = await self.filter_documents_async(filters=filters)
+        if not documents:
+            return 0
+
+        document_ids = [doc.id for doc in documents]
+
+        await self.delete_documents_async(document_ids)
+
+        deleted_count = len(document_ids)
+        logger.info(
+            "Deleted {n_docs} documents from index '{index}' using filters.",
+            n_docs=deleted_count,
+            index=self.index_name,
+        )
+
+        return deleted_count
+
+    def update_by_filter(self, filters: dict[str, Any], meta: dict[str, Any]) -> int:
+        """
+        Updates the metadata of all documents that match the provided filters.
+
+        Pinecone does not support server-side update by filter, so this method
+        first searches for matching documents, then updates their metadata and re-writes them.
+
+        :param filters: The filters to apply to select documents for updating.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :param meta: The metadata fields to update. This will be merged with existing metadata.
+        :returns: The number of documents updated.
+        """
+        _validate_filters(filters)
+
+        if not isinstance(meta, dict):
+            msg = "meta must be a dictionary"
+            raise ValueError(msg)
+
+        self._initialize_index()
+        assert self._index is not None, "Index is not initialized"
+
+        documents = self.filter_documents(filters=filters)
+        if not documents:
+            return 0
+
+        self._update_documents_metadata(documents, meta)
+
+        # Re-write documents with updated metadata
+        # Using OVERWRITE policy to update existing documents
+        self.write_documents(documents, policy=DuplicatePolicy.OVERWRITE)
+
+        updated_count = len(documents)
+        logger.info(
+            "Updated {n_docs} documents in index '{index}' using filters.",
+            n_docs=updated_count,
+            index=self.index_name,
+        )
+
+        return updated_count
+
+    async def update_by_filter_async(self, filters: dict[str, Any], meta: dict[str, Any]) -> int:
+        """
+        Asynchronously updates the metadata of all documents that match the provided filters.
+
+        Pinecone does not support server-side update by filter, so this method
+        first searches for matching documents, then updates their metadata and re-writes them.
+
+        :param filters: The filters to apply to select documents for updating.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :param meta: The metadata fields to update. This will be merged with existing metadata.
+        :returns: The number of documents updated.
+        """
+        _validate_filters(filters)
+
+        if not isinstance(meta, dict):
+            msg = "meta must be a dictionary"
+            raise ValueError(msg)
+
+        await self._initialize_async_index()
+        assert self._async_index is not None, "Index is not initialized"
+
+        documents = await self.filter_documents_async(filters=filters)
+        if not documents:
+            return 0
+
+        self._update_documents_metadata(documents, meta)
+
+        # Re-write documents with updated metadata
+        # Using OVERWRITE policy to update existing documents
+        await self.write_documents_async(documents, policy=DuplicatePolicy.OVERWRITE)
+
+        updated_count = len(documents)
+        logger.info(
+            "Updated {n_docs} documents in index '{index}' using filters.",
+            n_docs=updated_count,
+            index=self.index_name,
+        )
+
+        return updated_count
+
     def _embedding_retrieval(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         *,
-        namespace: Optional[str] = None,
-        filters: Optional[Dict[str, Any]] = None,
+        namespace: str | None = None,
+        filters: dict[str, Any] | None = None,
         top_k: int = 10,
-    ) -> List[Document]:
+    ) -> list[Document]:
         """
         Retrieves documents that are most similar to the query embedding using a vector similarity metric.
 
@@ -422,12 +592,12 @@ class PineconeDocumentStore:
 
     async def _embedding_retrieval_async(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         *,
-        namespace: Optional[str] = None,
-        filters: Optional[Dict[str, Any]] = None,
+        namespace: str | None = None,
+        filters: dict[str, Any] | None = None,
         top_k: int = 10,
-    ) -> List[Document]:
+    ) -> list[Document]:
         """
         Asynchronously retrieves documents that are similar to the query embedding using a vector similarity metric.
 
@@ -460,10 +630,12 @@ class PineconeDocumentStore:
         return self._convert_query_result_to_documents(result)
 
     @staticmethod
-    def _convert_meta_to_int(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    def _convert_meta_to_int(metadata: dict[str, Any]) -> dict[str, Any]:
         """
-        Pinecone store numeric metadata values as `float`. Some specific metadata are used in Retrievers components and
-        are expected to be `int`. This method converts them back to integers.
+        Convert specific numeric metadata values from `float` back to `int`.
+
+        Pinecone stores numeric metadata values as `float`. Some specific metadata are used in Retrievers
+        components and are expected to be `int`. This method converts them back to integers.
         """
         values_to_convert = ["split_id", "split_idx_start", "page_number"]
 
@@ -473,8 +645,8 @@ class PineconeDocumentStore:
 
         return metadata
 
-    def _convert_query_result_to_documents(self, query_result: Dict[str, Any]) -> List[Document]:
-        pinecone_docs = query_result["matches"]
+    def _convert_query_result_to_documents(self, query_result: Any) -> list[Document]:
+        pinecone_docs = query_result.matches
         documents = []
         for pinecone_doc in pinecone_docs:
             content = pinecone_doc["metadata"].pop("content", None)
@@ -496,7 +668,7 @@ class PineconeDocumentStore:
         return documents
 
     @staticmethod
-    def _discard_invalid_meta(document: Document) -> None:
+    def _discard_invalid_meta(document: Document) -> Document:
         """
         Remove metadata fields with unsupported types from the document.
         """
@@ -522,9 +694,13 @@ class PineconeDocumentStore:
                 )
                 logger.warning(msg)
 
-            document.meta = new_meta
+            return replace(document, meta=new_meta)
 
-    def _convert_documents_to_pinecone_format(self, documents: List[Document]) -> List[Dict[str, Any]]:
+        return document
+
+    def _convert_documents_to_pinecone_format(
+        self, documents: list[Document]
+    ) -> list[tuple[str, list[float], dict[str, Any]]]:
         documents_for_pinecone = []
         for document in documents:
             embedding = copy(document.embedding)
@@ -535,14 +711,13 @@ class PineconeDocumentStore:
                 )
                 embedding = self._dummy_vector
 
-            if document.meta:
-                self._discard_invalid_meta(document)
+            filtered_meta = self._discard_invalid_meta(document).meta if document.meta else {}
 
-            doc_for_pinecone: Dict[str, Any] = {"id": document.id, "values": embedding, "metadata": dict(document.meta)}
+            metadata = dict(filtered_meta) if filtered_meta else {}
 
             # we save content as metadata
             if document.content is not None:
-                doc_for_pinecone["metadata"]["content"] = document.content
+                metadata["content"] = document.content
 
             # currently, storing blob in Pinecone is not supported
             if document.blob is not None:
@@ -559,12 +734,12 @@ class PineconeDocumentStore:
                     document_id=document.id,
                 )
 
-            documents_for_pinecone.append(doc_for_pinecone)
+            documents_for_pinecone.append((document.id, embedding, metadata))
         return documents_for_pinecone
 
     def _prepare_documents_for_writing(
-        self, documents: List[Document], policy: DuplicatePolicy
-    ) -> List[Dict[str, Any]]:
+        self, documents: list[Document], policy: DuplicatePolicy
+    ) -> list[tuple[str, list[float], dict[str, Any]]]:
         """
         Helper method to prepare documents for writing to Pinecone.
         """
@@ -579,3 +754,346 @@ class PineconeDocumentStore:
             )
 
         return self._convert_documents_to_pinecone_format(documents)
+
+    @staticmethod
+    def _count_documents_impl(documents: list[Document]) -> int:
+        """Helper method to count documents and log warning if at TOP_K_LIMIT."""
+        count = len(documents)
+        if count == TOP_K_LIMIT:
+            logger.warning(
+                f"Count reached Pinecone's limit of {TOP_K_LIMIT} documents. "
+                f"The actual number of matching documents may be higher."
+            )
+        return count
+
+    @staticmethod
+    def _count_unique_metadata_impl(documents: list[Document], metadata_fields: list[str]) -> dict[str, int]:
+        """Helper method to count unique metadata values across specified fields."""
+        result = {}
+        for field in metadata_fields:
+            unique_values = set()
+            for doc in documents:
+                if doc.meta and field in doc.meta:
+                    value = doc.meta[field]
+                    # Handle list values
+                    if isinstance(value, list):
+                        unique_values.update(value)
+                    else:
+                        unique_values.add(value)
+            result[field] = len(unique_values)
+
+        if len(documents) == TOP_K_LIMIT:
+            logger.warning(
+                f"Analysis limited to {TOP_K_LIMIT} documents due to Pinecone's limits. "
+                f"Unique value counts may be incomplete."
+            )
+        return result
+
+    @staticmethod
+    def _get_metadata_fields_info_impl(documents: list[Document]) -> dict[str, dict[str, str]]:
+        """Helper method to infer metadata field types from documents."""
+        if not documents:
+            return {}
+
+        field_types: dict[str, dict[str, str]] = {}
+
+        # Check if any document has content
+        if any(doc.content is not None for doc in documents):
+            field_types["content"] = {"type": "text"}
+
+        # Collect all field values to infer types accurately
+        field_samples: dict[str, set[str]] = {}
+
+        for doc in documents:
+            if doc.meta:
+                for field, value in doc.meta.items():
+                    if field not in field_samples:
+                        field_samples[field] = set()
+
+                    # Note: bool check MUST come before int/float because bool is a subclass of int in Python
+                    if isinstance(value, bool):
+                        field_samples[field].add("boolean")
+                    elif isinstance(value, (int, float)):
+                        field_samples[field].add("long")
+                    elif isinstance(value, str):
+                        field_samples[field].add("keyword")
+                    elif isinstance(value, list):
+                        # For lists, check the type of elements if list is non-empty
+                        if value:
+                            # Sample first element to determine list type
+                            if isinstance(value[0], str):
+                                field_samples[field].add("keyword")
+                            elif isinstance(value[0], (int, float)):
+                                field_samples[field].add("long")
+                            elif isinstance(value[0], bool):
+                                field_samples[field].add("boolean")
+                        else:
+                            # Empty list, default to keyword
+                            field_samples[field].add("keyword")
+
+        # Assign types based on collected samples
+        for field, types_seen in field_samples.items():
+            if len(types_seen) == 1:
+                # Consistent type across all documents
+                field_types[field] = {"type": types_seen.pop()}
+            else:
+                # Mixed types - default to keyword and log warning
+                logger.warning(
+                    f"Field '{field}' has mixed types {types_seen} across documents. "
+                    f"Defaulting to 'keyword' type. Consider using consistent types for better query performance."
+                )
+                field_types[field] = {"type": "keyword"}
+
+        if len(documents) == TOP_K_LIMIT:
+            logger.info(
+                f"Schema inference based on {TOP_K_LIMIT} documents (Pinecone's query limit). "
+                f"If you have more documents with different metadata fields, they won't be reflected here."
+            )
+
+        return field_types
+
+    @staticmethod
+    def _get_metadata_field_min_max_impl(documents: list[Document], metadata_field: str) -> dict[str, Any]:
+        """Helper method to get min/max values for a metadata field (supports numeric, boolean, and string types)."""
+        field_name = metadata_field.removeprefix("meta.")
+        values: list[bool | int | float | str] = []
+        for doc in documents:
+            if doc.meta and field_name in doc.meta:
+                value = doc.meta[field_name]
+                # Note: bool check must come before numeric because bool is subclass of int
+                if isinstance(value, bool):
+                    values.append(value)
+                elif isinstance(value, (int, float)):
+                    values.append(value)
+                elif isinstance(value, str):
+                    values.append(value)
+
+        if not values:
+            msg = f"No values found for metadata field '{metadata_field}'"
+            raise ValueError(msg)
+
+        result = {"min": min(values), "max": max(values)}
+
+        if len(documents) == TOP_K_LIMIT:
+            logger.warning(
+                f"Min/max calculation limited to {TOP_K_LIMIT} documents. "
+                f"Results may not reflect the true min/max across all documents."
+            )
+
+        return result
+
+    @staticmethod
+    def _get_metadata_field_unique_values_impl(
+        documents: list[Document], metadata_field: str, search_term: str | None, from_: int, size: int
+    ) -> tuple[list[str], int]:
+        """Helper method to get unique values for a metadata field with search and pagination."""
+        unique_values: set[str] = set()
+        for doc in documents:
+            if doc.meta and metadata_field in doc.meta:
+                value = doc.meta[metadata_field]
+                # Handle list values
+                if isinstance(value, list):
+                    unique_values.update(str(v) for v in value)
+                else:
+                    unique_values.add(str(value))
+
+        # Convert to sorted list
+        unique_values_list = sorted(unique_values)
+
+        # Apply search term filter if provided
+        if search_term:
+            search_term_lower = search_term.lower()
+            unique_values_list = [v for v in unique_values_list if search_term_lower in v.lower()]
+
+        total_count = len(unique_values_list)
+
+        # Apply pagination
+        paginated_values = unique_values_list[from_ : from_ + size]
+
+        if len(documents) == TOP_K_LIMIT:
+            logger.warning(f"Unique values extraction limited to {TOP_K_LIMIT} documents. Results may be incomplete.")
+
+        return paginated_values, total_count
+
+    def count_documents_by_filter(self, filters: dict[str, Any]) -> int:
+        """
+        Returns the count of documents that match the provided filters.
+
+        Note: Due to Pinecone's limitations, this method fetches documents and counts them.
+        For large result sets, this is subject to Pinecone's TOP_K_LIMIT of 1000 documents.
+
+        :param filters: The filters to apply to the document list.
+            For filter syntax, see [Haystack metadata filtering](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+        :returns: The number of documents that match the filters.
+        """
+        documents = self.filter_documents(filters=filters)
+        return self._count_documents_impl(documents)
+
+    async def count_documents_by_filter_async(self, filters: dict[str, Any]) -> int:
+        """
+        Asynchronously returns the count of documents that match the provided filters.
+
+        Note: Due to Pinecone's limitations, this method fetches documents and counts them.
+        For large result sets, this is subject to Pinecone's TOP_K_LIMIT of 1000 documents.
+
+        :param filters: The filters to apply to the document list.
+        :returns: The number of documents that match the filters.
+        """
+        documents = await self.filter_documents_async(filters=filters)
+        return self._count_documents_impl(documents)
+
+    def count_unique_metadata_by_filter(self, filters: dict[str, Any], metadata_fields: list[str]) -> dict[str, int]:
+        """
+        Counts unique values for each specified metadata field in documents matching the filters.
+
+        Note: Due to Pinecone's limitations, this method fetches documents and aggregates in Python.
+        Subject to Pinecone's TOP_K_LIMIT of 1000 documents.
+
+        :param filters: The filters to apply to select documents.
+        :param metadata_fields: List of metadata field names to count unique values for.
+        :returns: Dictionary mapping field names to counts of unique values.
+        """
+        documents = self.filter_documents(filters=filters)
+        return self._count_unique_metadata_impl(documents, metadata_fields)
+
+    async def count_unique_metadata_by_filter_async(
+        self, filters: dict[str, Any], metadata_fields: list[str]
+    ) -> dict[str, int]:
+        """
+        Asynchronously counts unique values for each specified metadata field in documents matching the filters.
+
+        Note: Due to Pinecone's limitations, this method fetches documents and aggregates in Python.
+        Subject to Pinecone's TOP_K_LIMIT of 1000 documents.
+
+        :param filters: The filters to apply to select documents.
+        :param metadata_fields: List of metadata field names to count unique values for.
+        :returns: Dictionary mapping field names to counts of unique values.
+        """
+        documents = await self.filter_documents_async(filters=filters)
+        return self._count_unique_metadata_impl(documents, metadata_fields)
+
+    def get_metadata_fields_info(self) -> dict[str, dict[str, str]]:
+        """
+        Returns information about metadata fields and their types by sampling documents.
+
+        Note: Pinecone doesn't provide a schema introspection API, so this method infers field types
+        by examining the metadata of documents stored in the index (up to 1000 documents).
+
+        Type mappings:
+        - 'text': Document content field
+        - 'keyword': String metadata values
+        - 'long': Numeric metadata values (int or float)
+        - 'boolean': Boolean metadata values
+
+        :returns: Dictionary mapping field names to type information.
+            Example:
+            ```python
+            {
+                'content': {'type': 'text'},
+                'category': {'type': 'keyword'},
+                'priority': {'type': 'long'},
+            }
+            ```
+        """
+        documents = self.filter_documents(filters=None)
+        return self._get_metadata_fields_info_impl(documents)
+
+    async def get_metadata_fields_info_async(self) -> dict[str, dict[str, str]]:
+        """
+        Asynchronously returns information about metadata fields and their types by sampling documents.
+
+        Note: Pinecone doesn't provide a schema introspection API, so this method infers field types
+        by examining the metadata of documents stored in the index (up to 1000 documents).
+
+        Type mappings:
+        - 'text': Document content field
+        - 'keyword': String metadata values
+        - 'long': Numeric metadata values (int or float)
+        - 'boolean': Boolean metadata values
+
+        :returns: Dictionary mapping field names to type information.
+            Example:
+            ```python
+            {
+                'content': {'type': 'text'},
+                'category': {'type': 'keyword'},
+                'priority': {'type': 'long'},
+            }
+            ```
+        """
+        documents = await self.filter_documents_async(filters=None)
+        return self._get_metadata_fields_info_impl(documents)
+
+    def get_metadata_field_min_max(self, metadata_field: str) -> dict[str, Any]:
+        """
+        Returns the minimum and maximum values for a metadata field.
+
+        Supports numeric (int, float), boolean, and string (keyword) types:
+        - Numeric: Returns min/max based on numeric value
+        - Boolean: Returns False as min, True as max
+        - String: Returns min/max based on alphabetical ordering
+
+        Note: This method fetches all documents and computes min/max in Python.
+        Subject to Pinecone's TOP_K_LIMIT of 1000 documents.
+
+        :param metadata_field: The metadata field name to analyze.
+        :returns: Dictionary with 'min' and 'max' keys.
+        :raises ValueError: If the field doesn't exist or has no values.
+        """
+        documents = self.filter_documents(filters=None)
+        return self._get_metadata_field_min_max_impl(documents, metadata_field)
+
+    async def get_metadata_field_min_max_async(self, metadata_field: str) -> dict[str, Any]:
+        """
+        Asynchronously returns the minimum and maximum values for a metadata field.
+
+        Supports numeric (int, float), boolean, and string (keyword) types:
+        - Numeric: Returns min/max based on numeric value
+        - Boolean: Returns False as min, True as max
+        - String: Returns min/max based on alphabetical ordering
+
+        Note: This method fetches all documents and computes min/max in Python.
+        Subject to Pinecone's TOP_K_LIMIT of 1000 documents.
+
+        :param metadata_field: The metadata field name to analyze.
+        :returns: Dictionary with 'min' and 'max' keys.
+        :raises ValueError: If the field doesn't exist or has no values.
+        """
+        documents = await self.filter_documents_async(filters=None)
+        return self._get_metadata_field_min_max_impl(documents, metadata_field)
+
+    def get_metadata_field_unique_values(
+        self, metadata_field: str, search_term: str | None = None, from_: int = 0, size: int = 10
+    ) -> tuple[list[str], int]:
+        """
+        Retrieves unique values for a metadata field with optional search and pagination.
+
+        Note: This method fetches documents and extracts unique values in Python.
+        Subject to Pinecone's TOP_K_LIMIT of 1000 documents.
+
+        :param metadata_field: The metadata field name to get unique values for.
+        :param search_term: Optional search term to filter values (case-insensitive substring match).
+        :param from_: Starting offset for pagination (default: 0).
+        :param size: Number of values to return (default: 10).
+        :returns: Tuple of (list of unique values, total count of matching values).
+        """
+        documents = self.filter_documents(filters=None)
+        return self._get_metadata_field_unique_values_impl(documents, metadata_field, search_term, from_, size)
+
+    async def get_metadata_field_unique_values_async(
+        self, metadata_field: str, search_term: str | None = None, from_: int = 0, size: int = 10
+    ) -> tuple[list[str], int]:
+        """
+        Asynchronously retrieves unique values for a metadata field with optional search and pagination.
+
+        Note: This method fetches documents and extracts unique values in Python.
+        Subject to Pinecone's TOP_K_LIMIT of 1000 documents.
+
+        :param metadata_field: The metadata field name to get unique values for.
+        :param search_term: Optional search term to filter values (case-insensitive substring match).
+        :param from_: Starting offset for pagination (default: 0).
+        :param size: Number of values to return (default: 10).
+        :returns: Tuple of (list of unique values, total count of matching values).
+        """
+        documents = await self.filter_documents_async(filters=None)
+        return self._get_metadata_field_unique_values_impl(documents, metadata_field, search_term, from_, size)

@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar
 
 from haystack import component, default_to_dict, logging
 from haystack.components.generators.chat import OpenAIChatGenerator
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class MetaLlamaChatGenerator(OpenAIChatGenerator):
     """
     Enables text generation using Llama generative models.
+
     For supported models, see [Llama API Docs](https://llama.developer.meta.com/docs/).
 
     Users can pass any text generation parameters valid for the Llama Chat Completion API
@@ -54,19 +55,31 @@ class MetaLlamaChatGenerator(OpenAIChatGenerator):
     ```
     """
 
+    SUPPORTED_MODELS: ClassVar[list[str]] = [
+        "Llama-4-Maverick-17B-128E-Instruct-FP8",
+        "Llama-4-Scout-17B-16E-Instruct-FP8",
+        "Llama-3.3-70B-Instruct",
+        "Llama-3.3-8B-Instruct",
+    ]
+    """A non-exhaustive list of chat models supported by this component.
+    See https://llama.developer.meta.com/docs/models for the full list."""
+
     def __init__(
         self,
         *,
         api_key: Secret = Secret.from_env_var("LLAMA_API_KEY"),
         model: str = "Llama-4-Scout-17B-16E-Instruct-FP8",
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        api_base_url: Optional[str] = "https://api.llama.com/compat/v1/",
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
-    ):
+        streaming_callback: StreamingCallbackT | None = None,
+        api_base_url: str | None = "https://api.llama.com/compat/v1/",
+        generation_kwargs: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        tools: ToolsType | None = None,
+    ) -> None:
         """
-        Creates an instance of LlamaChatGenerator. Unless specified otherwise in the `model`, this is for Llama's
-        `Llama-4-Scout-17B-16E-Instruct-FP8` model.
+        Creates an instance of LlamaChatGenerator.
+
+        Unless specified otherwise in the `model`, this is for Llama's `Llama-4-Scout-17B-16E-Instruct-FP8` model.
 
         :param api_key:
             The Llama API key.
@@ -99,6 +112,10 @@ class MetaLlamaChatGenerator(OpenAIChatGenerator):
                 For details, see the [OpenAI Structured Outputs documentation](https://platform.openai.com/docs/guides/structured-outputs).
                 For structured outputs with streaming, the `response_format` must be a JSON
                 schema and not a Pydantic model.
+        :param timeout:
+            Timeout for Llama API client calls.
+        :param max_retries:
+            Maximum number of retries to attempt for failed requests.
         :param tools:
             A list of Tool and/or Toolset objects, or a single Toolset for which the model can prepare calls.
             Each tool should have a unique name.
@@ -110,6 +127,8 @@ class MetaLlamaChatGenerator(OpenAIChatGenerator):
             api_base_url=api_base_url,
             organization=None,
             generation_kwargs=generation_kwargs,
+            timeout=timeout,
+            max_retries=max_retries,
             tools=tools,
         )
 
@@ -117,10 +136,10 @@ class MetaLlamaChatGenerator(OpenAIChatGenerator):
         self,
         *,
         messages: list[ChatMessage],
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        generation_kwargs: Optional[dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
-        tools_strict: Optional[bool] = None,
+        streaming_callback: StreamingCallbackT | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
+        tools_strict: bool | None = None,
     ) -> dict[str, Any]:
         api_args = super(MetaLlamaChatGenerator, self)._prepare_api_call(  # noqa: UP008
             messages=messages,
@@ -134,7 +153,7 @@ class MetaLlamaChatGenerator(OpenAIChatGenerator):
             api_args.pop("response_format")
         return api_args
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize this component to a dictionary.
 
@@ -166,5 +185,7 @@ class MetaLlamaChatGenerator(OpenAIChatGenerator):
             api_base_url=self.api_base_url,
             generation_kwargs=generation_kwargs,
             api_key=self.api_key.to_dict(),
+            timeout=self.timeout,
+            max_retries=self.max_retries,
             tools=serialize_tools_or_toolset(self.tools),
         )

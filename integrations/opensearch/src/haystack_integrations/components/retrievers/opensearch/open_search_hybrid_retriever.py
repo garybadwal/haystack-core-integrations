@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from haystack import Document, Pipeline, default_from_dict, default_to_dict, logging, super_component
 from haystack.components.embedders.types import TextEmbedder
@@ -92,29 +92,31 @@ class OpenSearchHybridRetriever:
         *,
         embedder: TextEmbedder,
         # OpenSearchBM25Retriever
-        filters_bm25: Optional[Dict[str, Any]] = None,
-        fuzziness: Union[int, str] = "AUTO",
+        filters_bm25: dict[str, Any] | None = None,
+        fuzziness: int | str = "AUTO",
         top_k_bm25: int = 10,
         scale_score: bool = False,
         all_terms_must_match: bool = False,
-        filter_policy_bm25: Union[str, FilterPolicy] = FilterPolicy.REPLACE,
-        custom_query_bm25: Optional[Dict[str, Any]] = None,
+        filter_policy_bm25: str | FilterPolicy = FilterPolicy.REPLACE,
+        custom_query_bm25: dict[str, Any] | None = None,
         # OpenSearchEmbeddingRetriever
-        filters_embedding: Optional[Dict[str, Any]] = None,
+        filters_embedding: dict[str, Any] | None = None,
         top_k_embedding: int = 10,
-        filter_policy_embedding: Union[str, FilterPolicy] = FilterPolicy.REPLACE,
-        custom_query_embedding: Optional[Dict[str, Any]] = None,
+        filter_policy_embedding: str | FilterPolicy = FilterPolicy.REPLACE,
+        custom_query_embedding: dict[str, Any] | None = None,
+        search_kwargs_embedding: dict[str, Any] | None = None,
         # DocumentJoiner
-        join_mode: Union[str, JoinMode] = JoinMode.RECIPROCAL_RANK_FUSION,
-        weights: Optional[List[float]] = None,
-        top_k: Optional[int] = None,
+        join_mode: str | JoinMode = JoinMode.RECIPROCAL_RANK_FUSION,
+        weights: list[float] | None = None,
+        top_k: int | None = None,
         sort_by_score: bool = True,
         # extra kwargs
         **kwargs: Any,
     ) -> None:
         """
-        Initialize the OpenSearchHybridRetriever, a super component to retrieve documents from OpenSearch using
-        both embedding-based and keyword-based retrieval methods.
+        Initialize the OpenSearchHybridRetriever using both embedding-based and keyword-based retrieval methods.
+
+        This is a super component to retrieve documents from OpenSearch using both retrieval methods.
 
         We don't explicitly define all the init parameters of the components in the constructor, for each
         of the components, since that would be around 20+ parameters. Instead, we define the most important ones
@@ -153,6 +155,8 @@ class OpenSearchHybridRetriever:
             The filter policy for the embedding retriever.
         :param custom_query_embedding:
             A custom query for the embedding retriever.
+        :param search_kwargs_embedding:
+            Additional search kwargs for the embedding retriever.
         :param join_mode:
             The mode to use for joining the results from the BM25 and embedding retrievers.
         :param weights:
@@ -185,6 +189,7 @@ class OpenSearchHybridRetriever:
         self.top_k_embedding = top_k_embedding
         self.filter_policy_embedding = filter_policy_embedding
         self.custom_query_embedding = custom_query_embedding
+        self.search_kwargs_embedding = search_kwargs_embedding
 
         # DocumentJoiner
         self.join_mode = join_mode
@@ -192,7 +197,7 @@ class OpenSearchHybridRetriever:
         self.top_k = top_k
         self.sort_by_score = sort_by_score
 
-        init_args: Dict[str, Any] = {
+        init_args: dict[str, Any] = {
             "bm25_retriever": {
                 "document_store": self.document_store,
                 "filters": self.filters_bm25,
@@ -209,6 +214,7 @@ class OpenSearchHybridRetriever:
                 "top_k": self.top_k_embedding,
                 "filter_policy": self.filter_policy_embedding,
                 "custom_query": self.custom_query_embedding,
+                "search_kwargs": self.search_kwargs_embedding,
             },
             "document_joiner": {
                 "join_mode": self.join_mode,
@@ -237,16 +243,20 @@ class OpenSearchHybridRetriever:
 
     if TYPE_CHECKING:
 
-        def warm_up(self) -> None: ...
+        def warm_up(self) -> None:
+            """Warm up the underlying pipeline components."""
+            ...
 
         def run(
             self,
             query: str,
-            filters_bm25: Optional[Dict[str, Any]] = None,
-            filters_embedding: Optional[Dict[str, Any]] = None,
-            top_k_bm25: Optional[int] = None,
-            top_k_embedding: Optional[int] = None,
-        ) -> Dict[str, List[Document]]: ...
+            filters_bm25: dict[str, Any] | None = None,
+            filters_embedding: dict[str, Any] | None = None,
+            top_k_bm25: int | None = None,
+            top_k_embedding: int | None = None,
+        ) -> dict[str, list[Document]]:
+            """Run the hybrid retrieval pipeline and return retrieved documents."""
+            ...
 
     def _create_pipeline(self, data: dict[str, Any]) -> Pipeline:
         """
@@ -279,7 +289,7 @@ class OpenSearchHybridRetriever:
 
         return hybrid_retrieval
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize OpenSearchHybridRetriever to a dictionary.
 
@@ -311,6 +321,7 @@ class OpenSearchHybridRetriever:
                 else self.filter_policy_embedding
             ),
             custom_query_embedding=self.custom_query_embedding,
+            search_kwargs_embedding=self.search_kwargs_embedding,
             # DocumentJoiner
             join_mode=(self.join_mode.value if isinstance(self.join_mode, JoinMode) else self.join_mode),
             weights=self.weights,
@@ -321,7 +332,8 @@ class OpenSearchHybridRetriever:
         )
 
     @classmethod
-    def from_dict(cls, data):
+    def from_dict(cls, data: dict[str, Any]) -> "OpenSearchHybridRetriever":
+        """Deserialize an OpenSearchHybridRetriever from a dictionary."""
         # deserialize the document store
         doc_store = OpenSearchDocumentStore.from_dict(data["init_parameters"]["document_store"])
         data["init_parameters"]["document_store"] = doc_store

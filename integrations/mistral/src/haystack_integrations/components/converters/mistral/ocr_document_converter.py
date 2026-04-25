@@ -1,7 +1,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, ClassVar
 
 from haystack import Document, component, default_from_dict, default_to_dict, logging
 from haystack.components.converters.utils import (
@@ -10,14 +10,14 @@ from haystack.components.converters.utils import (
 )
 from haystack.dataclasses import ByteStream
 from haystack.utils import Secret, deserialize_secrets_inplace
-from mistralai import Mistral
-from mistralai.extra import response_format_from_pydantic_model
-from mistralai.models import (
+from mistralai.client import Mistral
+from mistralai.client.models import (
     DocumentURLChunk,
     FileChunk,
     ImageURLChunk,
     OCRResponse,
 )
+from mistralai.extra import response_format_from_pydantic_model  # type: ignore[import-untyped]
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 @component
 class MistralOCRDocumentConverter:
     """
-    This component extracts text from documents using Mistral's OCR API, with optional structured
-    annotations for both individual image regions (bounding boxes) and full documents.
+    Extract text from documents using Mistral's OCR API with optional structured annotations.
+
+    Supports optional structured annotations for individual image regions (bounding boxes) and full documents.
 
     Accepts document sources in various formats (str/Path for local files, ByteStream for in-memory data,
     DocumentURLChunk for document URLs, ImageURLChunk for image URLs, or FileChunk for Mistral file IDs)
@@ -98,16 +99,26 @@ class MistralOCRDocumentConverter:
     ```
     """
 
+    SUPPORTED_MODELS: ClassVar[list[str]] = [
+        "mistral-ocr-2512",
+        "mistral-ocr-latest",
+        "mistral-ocr-2503",
+        "mistral-ocr-2505",
+    ]
+    """A list of models supported by Mistral AI
+    see [Mistral AI docs](https://docs.mistral.ai/getting-started/models) for more information
+    and send a GET HTTP request to "https://api.mistral.ai/v1/models" for a full list of model IDs."""
+
     def __init__(
         self,
         api_key: Secret = Secret.from_env_var("MISTRAL_API_KEY"),
         model: str = "mistral-ocr-2505",
         include_image_base64: bool = False,
-        pages: Optional[List[int]] = None,
-        image_limit: Optional[int] = None,
-        image_min_size: Optional[int] = None,
+        pages: list[int] | None = None,
+        image_limit: int | None = None,
+        image_min_size: int | None = None,
         cleanup_uploaded_files: bool = True,
-    ):
+    ) -> None:
         """
         Creates a MistralOCRDocumentConverter component.
 
@@ -141,7 +152,7 @@ class MistralOCRDocumentConverter:
         # Initialize Mistral client
         self.client = Mistral(api_key=self.api_key.resolve_value())
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -160,7 +171,7 @@ class MistralOCRDocumentConverter:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MistralOCRDocumentConverter":
+    def from_dict(cls, data: dict[str, Any]) -> "MistralOCRDocumentConverter":
         """
         Deserializes the component from a dictionary.
 
@@ -172,14 +183,14 @@ class MistralOCRDocumentConverter:
         deserialize_secrets_inplace(data["init_parameters"], keys=["api_key"])
         return default_from_dict(cls, data)
 
-    @component.output_types(documents=List[Document], raw_mistral_response=List[Dict[str, Any]])
+    @component.output_types(documents=list[Document], raw_mistral_response=list[dict[str, Any]])
     def run(
         self,
-        sources: List[Union[str, Path, ByteStream, DocumentURLChunk, FileChunk, ImageURLChunk]],
-        meta: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
-        bbox_annotation_schema: Optional[Type[BaseModel]] = None,
-        document_annotation_schema: Optional[Type[BaseModel]] = None,
-    ) -> Dict[str, Any]:
+        sources: list[str | Path | ByteStream | DocumentURLChunk | FileChunk | ImageURLChunk],
+        meta: dict[str, Any] | list[dict[str, Any]] | None = None,
+        bbox_annotation_schema: type[BaseModel] | None = None,
+        document_annotation_schema: type[BaseModel] | None = None,
+    ) -> dict[str, Any]:
         """
         Extract text from documents using Mistral OCR.
 
@@ -234,7 +245,7 @@ class MistralOCRDocumentConverter:
         raw_responses = []
         uploaded_file_ids = []
 
-        for source, user_metadata in zip(sources, meta_list):
+        for source, user_metadata in zip(sources, meta_list, strict=True):
             document, raw_response, uploaded_file_id = self._process_single_source(
                 source,
                 user_metadata,
@@ -259,12 +270,12 @@ class MistralOCRDocumentConverter:
 
     def _process_single_source(
         self,
-        source: Union[str, Path, ByteStream, DocumentURLChunk, FileChunk, ImageURLChunk],
-        user_metadata: Dict[str, Any],
-        bbox_annotation_format: Optional[Any],
-        document_annotation_format: Optional[Any],
-        document_annotation_schema: Optional[Type[BaseModel]],
-    ) -> tuple[Optional[Document], Optional[Dict[str, Any]], Optional[str]]:
+        source: str | Path | ByteStream | DocumentURLChunk | FileChunk | ImageURLChunk,
+        user_metadata: dict[str, Any],
+        bbox_annotation_format: Any | None,
+        document_annotation_format: Any | None,
+        document_annotation_schema: type[BaseModel] | None,
+    ) -> tuple[Document | None, dict[str, Any] | None, str | None]:
         """
         Process a single source and return the document, raw response, and file_id if uploaded.
 
@@ -312,7 +323,7 @@ class MistralOCRDocumentConverter:
             )
             return (None, None, uploaded_file_id)
 
-    def _cleanup_uploaded_files(self, file_ids: List[str]) -> None:
+    def _cleanup_uploaded_files(self, file_ids: list[str]) -> None:
         """
         Delete uploaded files from Mistral storage.
 
@@ -334,8 +345,8 @@ class MistralOCRDocumentConverter:
 
     def _convert_source_to_chunk(
         self,
-        source: Union[str, Path, ByteStream, DocumentURLChunk, FileChunk, ImageURLChunk],
-    ) -> Union[DocumentURLChunk, FileChunk, ImageURLChunk]:
+        source: str | Path | ByteStream | DocumentURLChunk | FileChunk | ImageURLChunk,
+    ) -> DocumentURLChunk | FileChunk | ImageURLChunk:
         """
         Convert various source types to Mistral-compatible chunk format.
 
@@ -370,8 +381,8 @@ class MistralOCRDocumentConverter:
     def _process_ocr_response(
         self,
         ocr_response: OCRResponse,
-        user_metadata: Dict[str, Any],
-        document_annotation_schema: Optional[Type[BaseModel]],
+        user_metadata: dict[str, Any],
+        document_annotation_schema: type[BaseModel] | None,
     ) -> Document:
         """
         Convert an OCR response from Mistral API into a single Haystack Document.

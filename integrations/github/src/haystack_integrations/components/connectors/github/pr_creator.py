@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 import re
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
 from haystack import component, default_from_dict, default_to_dict, logging
@@ -38,7 +38,12 @@ class GitHubPRCreator:
     ```
     """
 
-    def __init__(self, *, github_token: Secret = Secret.from_env_var("GITHUB_TOKEN"), raise_on_failure: bool = True):
+    def __init__(
+        self,
+        *,
+        github_token: Secret = Secret.from_env_var("GITHUB_TOKEN"),
+        raise_on_failure: bool = True,
+    ) -> None:
         """
         Initialize the component.
 
@@ -102,7 +107,7 @@ class GitHubPRCreator:
         except requests.RequestException:
             return False
 
-    def _create_fork(self, owner: str, repo: str) -> Optional[str]:
+    def _create_fork(self, owner: str, repo: str) -> str | None:
         """Create a fork of the repository."""
         url = f"https://api.github.com/repos/{owner}/{repo}/forks"
         try:
@@ -215,7 +220,7 @@ class GitHubPRCreator:
     @component.output_types(result=str)
     def run(
         self, issue_url: str, title: str, branch: str, base: str, body: str = "", draft: bool = False
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """
         Create a new pull request from your fork to the original repository, linked to the specified issue.
 
@@ -263,7 +268,7 @@ class GitHubPRCreator:
                 raise
             return {"result": f"Error: {e!s}"}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize the component to a dictionary."""
         return default_to_dict(
             self,
@@ -272,7 +277,7 @@ class GitHubPRCreator:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "GitHubPRCreator":
+    def from_dict(cls, data: dict[str, Any]) -> "GitHubPRCreator":
         """Deserialize the component from a dictionary."""
         init_params = data["init_parameters"]
         deserialize_secrets_inplace(init_params, keys=["github_token"])

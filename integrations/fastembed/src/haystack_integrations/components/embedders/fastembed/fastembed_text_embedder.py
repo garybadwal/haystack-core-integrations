@@ -1,8 +1,12 @@
-from typing import Any, Dict, List, Optional
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from typing import Any
 
 from haystack import component, default_to_dict
 
-from .embedding_backend.fastembed_backend import _FastembedEmbeddingBackendFactory
+from .embedding_backend.fastembed_backend import _FastembedEmbeddingBackend, _FastembedEmbeddingBackendFactory
 
 
 @component
@@ -20,7 +24,6 @@ class FastembedTextEmbedder:
     text_embedder = FastembedTextEmbedder(
         model="BAAI/bge-small-en-v1.5"
     )
-    text_embedder.warm_up()
 
     embedding = text_embedder.run(text)["embedding"]
     ```
@@ -29,14 +32,14 @@ class FastembedTextEmbedder:
     def __init__(
         self,
         model: str = "BAAI/bge-small-en-v1.5",
-        cache_dir: Optional[str] = None,
-        threads: Optional[int] = None,
+        cache_dir: str | None = None,
+        threads: int | None = None,
         prefix: str = "",
         suffix: str = "",
         progress_bar: bool = True,
-        parallel: Optional[int] = None,
+        parallel: int | None = None,
         local_files_only: bool = False,
-    ):
+    ) -> None:
         """
         Create a FastembedTextEmbedder component.
 
@@ -63,8 +66,9 @@ class FastembedTextEmbedder:
         self.progress_bar = progress_bar
         self.parallel = parallel
         self.local_files_only = local_files_only
+        self.embedding_backend: _FastembedEmbeddingBackend | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -83,11 +87,11 @@ class FastembedTextEmbedder:
             local_files_only=self.local_files_only,
         )
 
-    def warm_up(self):
+    def warm_up(self) -> None:
         """
         Initializes the component.
         """
-        if not hasattr(self, "embedding_backend"):
+        if self.embedding_backend is None:
             self.embedding_backend = _FastembedEmbeddingBackendFactory.get_embedding_backend(
                 model_name=self.model_name,
                 cache_dir=self.cache_dir,
@@ -95,8 +99,8 @@ class FastembedTextEmbedder:
                 local_files_only=self.local_files_only,
             )
 
-    @component.output_types(embedding=List[float])
-    def run(self, text: str) -> Dict[str, List[float]]:
+    @component.output_types(embedding=list[float])
+    def run(self, text: str) -> dict[str, list[float]]:
         """
         Embeds text using the Fastembed model.
 
@@ -104,7 +108,6 @@ class FastembedTextEmbedder:
         :returns: A dictionary with the following keys:
             - `embedding`: A list of floats representing the embedding of the input text.
         :raises TypeError: If the input is not a string.
-        :raises RuntimeError: If the embedding model has not been loaded.
         """
         if not isinstance(text, str):
             msg = (
@@ -112,13 +115,13 @@ class FastembedTextEmbedder:
                 "In case you want to embed a list of Documents, please use the FastembedDocumentEmbedder."
             )
             raise TypeError(msg)
-        if not hasattr(self, "embedding_backend"):
-            msg = "The embedding model has not been loaded. Please call warm_up() before running."
-            raise RuntimeError(msg)
+
+        if self.embedding_backend is None:
+            self.warm_up()
 
         text_to_embed = [self.prefix + text + self.suffix]
         embedding = list(
-            self.embedding_backend.embed(
+            self.embedding_backend.embed(  # type: ignore[union-attr]
                 text_to_embed,
                 progress_bar=self.progress_bar,
                 parallel=self.parallel,

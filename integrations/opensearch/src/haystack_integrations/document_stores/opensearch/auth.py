@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, Optional, Type, TypeVar
+from typing import Any, Optional, TypeVar
 
 from haystack import default_from_dict, default_to_dict
 from haystack.document_stores.errors import DocumentStoreError
@@ -27,20 +27,21 @@ class AWSConfigurationError(DocumentStoreError):
     """Exception raised when AWS is not configured correctly"""
 
 
-def _resolve_secret(secret: Optional[Secret]) -> Optional[str]:
+def _resolve_secret(secret: Secret | None) -> str | None:
     return secret.resolve_value() if secret else None
 
 
 def _get_aws_session(
-    aws_access_key_id: Optional[str] = None,
-    aws_secret_access_key: Optional[str] = None,
-    aws_session_token: Optional[str] = None,
-    aws_region_name: Optional[str] = None,
-    aws_profile_name: Optional[str] = None,
+    aws_access_key_id: str | None = None,
+    aws_secret_access_key: str | None = None,
+    aws_session_token: str | None = None,
+    aws_region_name: str | None = None,
+    aws_profile_name: str | None = None,
     **kwargs: Any,
 ) -> "boto3.Session":
     """
     Creates an AWS Session with the given parameters.
+
     Checks if the provided AWS credentials are valid and can be used to connect to AWS.
 
     :param aws_access_key_id: AWS access key ID.
@@ -78,19 +79,19 @@ class AWSAuth:
     the necessary `Urllib3AWSV4SignerAuth` creation steps including boto3 Sessions and boto3 credentials.
     """
 
-    aws_access_key_id: Optional[Secret] = field(
+    aws_access_key_id: Secret | None = field(
         default_factory=lambda: Secret.from_env_var("AWS_ACCESS_KEY_ID", strict=False)
     )
-    aws_secret_access_key: Optional[Secret] = field(
+    aws_secret_access_key: Secret | None = field(
         default_factory=lambda: Secret.from_env_var("AWS_SECRET_ACCESS_KEY", strict=False)
     )
-    aws_session_token: Optional[Secret] = field(
+    aws_session_token: Secret | None = field(
         default_factory=lambda: Secret.from_env_var("AWS_SESSION_TOKEN", strict=False)
     )
-    aws_region_name: Optional[Secret] = field(
+    aws_region_name: Secret | None = field(
         default_factory=lambda: Secret.from_env_var("AWS_DEFAULT_REGION", strict=False)
     )
-    aws_profile_name: Optional[Secret] = field(default_factory=lambda: Secret.from_env_var("AWS_PROFILE", strict=False))
+    aws_profile_name: Secret | None = field(default_factory=lambda: Secret.from_env_var("AWS_PROFILE", strict=False))
     aws_service: str = field(default="es")
 
     def __post_init__(self) -> None:
@@ -99,14 +100,14 @@ class AWSAuth:
         """
         self._urllib3_aws_v4_signer_auth = self._get_aws_v4_signer_auth(Urllib3AWSV4SignerAuth)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Converts the object to a dictionary representation for serialization.
         """
         _fields = {}
         for _field in fields(self):
             field_value = getattr(self, _field.name)
-            if _field.type == Optional[Secret]:
+            if _field.type == Secret | None:
                 _fields[_field.name] = field_value.to_dict() if field_value is not None else None
             else:
                 _fields[_field.name] = field_value
@@ -114,7 +115,7 @@ class AWSAuth:
         return default_to_dict(self, **_fields)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> Optional["AWSAuth"]:
+    def from_dict(cls, data: dict[str, Any]) -> Optional["AWSAuth"]:
         """
         Converts a dictionary representation to an AWSAuth object.
         """
@@ -125,21 +126,29 @@ class AWSAuth:
         )
         return default_from_dict(cls, data)
 
-    def __call__(self, method: str, url: str, body: Any) -> Dict[str, str]:
+    def __call__(
+        self,
+        method: str,
+        url: str,
+        body: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, str]:
         """
         Signs the request and returns headers.
 
         This method is executed by Urllib3 when making a request to the OpenSearch service.
+        Compatible with opensearch-py 3.x which may call with (method, url, body, headers).
 
         :param method: HTTP method
         :param url: URL
-        :param body: Body
+        :param body: Request body
+        :param headers: Request headers to sign (opensearch-py 3.x passes these)
         :return:
             A dictionary containing the signed headers.
         """
-        return self._urllib3_aws_v4_signer_auth(method, url, body)
+        return self._urllib3_aws_v4_signer_auth(method, url, body, headers)
 
-    def _get_aws_v4_signer_auth(self, signer_auth_class: Type[TSignerAuth]) -> TSignerAuth:
+    def _get_aws_v4_signer_auth(self, signer_auth_class: type[TSignerAuth]) -> TSignerAuth:
         try:
             region_name = _resolve_secret(self.aws_region_name)
             session = _get_aws_session(
@@ -184,17 +193,25 @@ class AsyncAWSAuth:
         self.aws_auth = aws_auth
         self._async_aws_v4_signer_auth = self.aws_auth._get_aws_v4_signer_auth(AWSV4SignerAsyncAuth)
 
-    def __call__(self, method: str, url: str, query_string: str, body: Any) -> Dict[str, str]:
+    def __call__(
+        self,
+        method: str,
+        url: str,
+        body: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, str]:
         """
         Signs the request and returns headers.
 
         This method is executed by AsyncHttpConnection when making a request to the OpenSearch service.
+        Compatible with opensearch-py 3.x which calls with (method, url, body, headers).
+        The query_string parameter was removed in opensearch-py 3.x.
 
         :param method: HTTP method
         :param url: URL
-        :param query_string: Query string
-        :param body: Body
+        :param body: Request body
+        :param headers: Request headers to sign (opensearch-py 3.x passes these)
         :return:
             A dictionary containing the signed headers.
         """
-        return self._async_aws_v4_signer_auth(method, url, query_string, body)
+        return self._async_aws_v4_signer_auth(method, url, body, headers)

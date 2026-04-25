@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from haystack import component, default_to_dict, logging
 from haystack.components.generators.chat import OpenAIChatGenerator
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 class OpenRouterChatGenerator(OpenAIChatGenerator):
     """
     Enables text generation using OpenRouter generative models.
+
     For supported models, see [OpenRouter docs](https://openrouter.ai/models).
 
     Users can pass any text generation parameters valid for the OpenRouter chat completion API
@@ -51,7 +52,7 @@ class OpenRouterChatGenerator(OpenAIChatGenerator):
     >>{'replies': [ChatMessage(_content='Natural Language Processing (NLP) is a branch of artificial intelligence
     >>that focuses on enabling computers to understand, interpret, and generate human language in a way that is
     >>meaningful and useful.', _role=<ChatRole.ASSISTANT: 'assistant'>, _name=None,
-    >>_meta={'model': 'openai/gpt-4o-mini', 'index': 0, 'finish_reason': 'stop',
+    >>_meta={'model': 'openai/gpt-5-mini', 'index': 0, 'finish_reason': 'stop',
     >>'usage': {'prompt_tokens': 15, 'completion_tokens': 36, 'total_tokens': 51}})]}
     ```
     """
@@ -60,19 +61,18 @@ class OpenRouterChatGenerator(OpenAIChatGenerator):
         self,
         *,
         api_key: Secret = Secret.from_env_var("OPENROUTER_API_KEY"),
-        model: str = "openai/gpt-4o-mini",
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        api_base_url: Optional[str] = "https://openrouter.ai/api/v1",
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
-        timeout: Optional[float] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        max_retries: Optional[int] = None,
-        http_client_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+        model: str = "openai/gpt-5-mini",
+        streaming_callback: StreamingCallbackT | None = None,
+        api_base_url: str | None = "https://openrouter.ai/api/v1",
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
+        timeout: float | None = None,
+        extra_headers: dict[str, Any] | None = None,
+        max_retries: int | None = None,
+        http_client_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """
-        Creates an instance of OpenRouterChatGenerator. Unless specified otherwise,
-        the default model is `openai/gpt-4o-mini`.
+        Creates an instance of OpenRouterChatGenerator.
 
         :param api_key:
             The OpenRouter API key.
@@ -136,7 +136,7 @@ class OpenRouterChatGenerator(OpenAIChatGenerator):
         )
         self.extra_headers = extra_headers
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize this component to a dictionary.
 
@@ -167,10 +167,10 @@ class OpenRouterChatGenerator(OpenAIChatGenerator):
         self,
         *,
         messages: list[ChatMessage],
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        generation_kwargs: Optional[dict[str, Any]] = None,
-        tools: Optional[ToolsType] = None,
-        tools_strict: Optional[bool] = None,
+        streaming_callback: StreamingCallbackT | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+        tools: ToolsType | None = None,
+        tools_strict: bool | None = None,
     ) -> dict[str, Any]:
         # update generation kwargs by merging with the generation kwargs passed to the run method
         generation_kwargs = {**self.generation_kwargs, **(generation_kwargs or {})}

@@ -1,6 +1,7 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
+from psycopg import AsyncConnection, Connection
 
 from haystack_integrations.document_stores.pgvector import PgvectorDocumentStore
 
@@ -80,11 +81,15 @@ def document_store_w_halfvec_hnsw_index(request, monkeypatch):
 
 @pytest.fixture
 def patches_for_unit_tests():
-    with patch("haystack_integrations.document_stores.pgvector.document_store.register_vector") as mock_register, patch(
-        "haystack_integrations.document_stores.pgvector.document_store.PgvectorDocumentStore.delete_table"
-    ) as mock_delete, patch(
-        "haystack_integrations.document_stores.pgvector.document_store.PgvectorDocumentStore._handle_hnsw"
-    ) as mock_hnsw:
+    with (
+        patch("haystack_integrations.document_stores.pgvector.document_store.register_vector") as mock_register,
+        patch(
+            "haystack_integrations.document_stores.pgvector.document_store.PgvectorDocumentStore.delete_table"
+        ) as mock_delete,
+        patch(
+            "haystack_integrations.document_stores.pgvector.document_store.PgvectorDocumentStore._handle_hnsw"
+        ) as mock_hnsw,
+    ):
         yield mock_register, mock_delete, mock_hnsw
 
 
@@ -106,3 +111,15 @@ def mock_store(patches_for_unit_tests, monkeypatch):  # noqa: ARG001  patches ar
     )
 
     yield store
+
+
+@pytest.fixture
+def mock_store_with_mock_connection(mock_store):
+    mock_store._connection = Mock(spec=Connection)
+    return mock_store
+
+
+@pytest.fixture
+def mock_store_with_mock_async_connection(mock_store):
+    mock_store._async_connection = Mock(spec=AsyncConnection)
+    return mock_store

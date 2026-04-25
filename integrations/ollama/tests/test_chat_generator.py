@@ -1,6 +1,6 @@
 import json
 from typing import Annotated
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from haystack.components.generators.utils import print_streaming_chunk
@@ -137,7 +137,7 @@ class TestUtils:
         assert observed.role == "assistant"
         assert observed.text == "Hello! How are you today?"
 
-        assert observed.meta == {
+        expected_data = {
             "finish_reason": "stop",
             "usage": {
                 "completion_tokens": 298,
@@ -152,6 +152,11 @@ class TestUtils:
             "done": True,
             "model": "some_model",
         }
+
+        if "logprobs" in observed.meta:
+            expected_data["logprobs"] = None
+
+        assert observed.meta == expected_data
 
     def test_convert_ollama_response_to_chatmessage_with_tools(self):
         model = "some_model"
@@ -261,6 +266,70 @@ class TestUtils:
         assert streaming_chunks[0].start is True
         assert streaming_chunks[1].start is False
         assert streaming_chunks[2].start is False
+
+    def test_handle_streaming_response_with_thinking(self):
+        ollama_chunks = [
+            ChatResponse(
+                model="qwen3:0.6b",
+                created_at="2025-07-31T15:27:09.265818Z",
+                done=False,
+                message=Message(role="assistant", content="", thinking="Let me think"),
+            ),
+            ChatResponse(
+                model="qwen3:0.6b",
+                created_at="2025-07-31T15:27:09.265818Z",
+                done=False,
+                message=Message(role="assistant", content="", thinking=" about this."),
+            ),
+            ChatResponse(
+                model="qwen3:0.6b",
+                created_at="2025-07-31T15:27:09.265818Z",
+                done=False,
+                message=Message(role="assistant", content="The capital"),
+            ),
+            ChatResponse(
+                model="qwen3:0.6b",
+                created_at="2025-07-31T15:27:09.265818Z",
+                done=False,
+                message=Message(role="assistant", content=" is Amman."),
+            ),
+            ChatResponse(
+                model="qwen3:0.6b",
+                created_at="2025-07-31T15:27:09.355211Z",
+                done=True,
+                done_reason="stop",
+                total_duration=1303416458,
+                load_duration=953922333,
+                prompt_eval_count=22,
+                prompt_eval_duration=254166208,
+                eval_count=3,
+                eval_duration=92965792,
+                message=Message(role="assistant", content=""),
+            ),
+        ]
+
+        generator = OllamaChatGenerator()
+        streaming_chunks = []
+
+        def test_callback(chunk: StreamingChunk):
+            streaming_chunks.append(chunk)
+
+        response = generator._handle_streaming_response(ollama_chunks, test_callback)
+        assert response["replies"][0].text == "The capital is Amman."
+        assert response["replies"][0].reasoning.reasoning_text == "Let me think about this."
+
+        assert len(streaming_chunks) == 5
+        # First reasoning chunk: start=True
+        assert streaming_chunks[0].start is True
+        assert streaming_chunks[0].reasoning.reasoning_text == "Let me think"
+        # Second reasoning chunk: start=False
+        assert streaming_chunks[1].start is False
+        # First content chunk after reasoning: start=True
+        assert streaming_chunks[2].start is True
+        assert streaming_chunks[2].content == "The capital"
+        # Remaining content chunks: start=False
+        assert streaming_chunks[3].start is False
+        assert streaming_chunks[4].start is False
 
     def test_handle_streaming_response_tool_calls(self):
         ollama_chunks = [
@@ -472,18 +541,19 @@ class TestUtils:
         assert result["replies"][0].meta["model"] == "qwen3:0.6b"
 
         assert len(streaming_chunks) == 14
-        assert streaming_chunks[0].meta["reasoning"] == "Okay"
-        assert streaming_chunks[1].meta["reasoning"] == ","
-        assert streaming_chunks[2].meta["reasoning"] == " the"
-        assert streaming_chunks[3].meta["reasoning"] == " user"
-        assert streaming_chunks[4].meta["reasoning"] == " is"
-        assert streaming_chunks[5].meta["reasoning"] == " asking"
-        assert streaming_chunks[6].meta["reasoning"] == " "
-        assert streaming_chunks[7].meta["reasoning"] == "2"
-        assert streaming_chunks[8].meta["reasoning"] == " plus"
-        assert streaming_chunks[9].meta["reasoning"] == " "
-        assert streaming_chunks[10].meta["reasoning"] == "2"
-        assert streaming_chunks[11].meta["reasoning"] == "."
+        assert streaming_chunks[0].reasoning is not None
+        assert streaming_chunks[0].reasoning.reasoning_text == "Okay"
+        assert streaming_chunks[1].reasoning.reasoning_text == ","
+        assert streaming_chunks[2].reasoning.reasoning_text == " the"
+        assert streaming_chunks[3].reasoning.reasoning_text == " user"
+        assert streaming_chunks[4].reasoning.reasoning_text == " is"
+        assert streaming_chunks[5].reasoning.reasoning_text == " asking"
+        assert streaming_chunks[6].reasoning.reasoning_text == " "
+        assert streaming_chunks[7].reasoning.reasoning_text == "2"
+        assert streaming_chunks[8].reasoning.reasoning_text == " plus"
+        assert streaming_chunks[9].reasoning.reasoning_text == " "
+        assert streaming_chunks[10].reasoning.reasoning_text == "2"
+        assert streaming_chunks[11].reasoning.reasoning_text == "."
 
         for i, chunk in enumerate(streaming_chunks):
             if i in [0, 12]:
@@ -512,6 +582,7 @@ class TestOllamaChatGeneratorInitSerializeDeserialize:
         assert component.url == "http://localhost:11434"
         assert component.generation_kwargs == {}
         assert component.timeout == 120
+        assert component.max_retries == 0
         assert component.streaming_callback is None
         assert component.tools is None
         assert component.keep_alive is None
@@ -523,6 +594,7 @@ class TestOllamaChatGeneratorInitSerializeDeserialize:
             url="http://my-custom-endpoint:11434",
             generation_kwargs={"temperature": 0.5},
             timeout=5,
+            max_retries=2,
             keep_alive="10m",
             streaming_callback=print_streaming_chunk,
             tools=tools,
@@ -533,6 +605,7 @@ class TestOllamaChatGeneratorInitSerializeDeserialize:
         assert component.url == "http://my-custom-endpoint:11434"
         assert component.generation_kwargs == {"temperature": 0.5}
         assert component.timeout == 5
+        assert component.max_retries == 2
         assert component.keep_alive == "10m"
         assert component.streaming_callback is print_streaming_chunk
         assert component.tools == tools
@@ -597,6 +670,7 @@ class TestOllamaChatGeneratorInitSerializeDeserialize:
             "type": "haystack_integrations.components.generators.ollama.chat.chat_generator.OllamaChatGenerator",
             "init_parameters": {
                 "timeout": 120,
+                "max_retries": 0,
                 "model": "llama2",
                 "url": "custom_url",
                 "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
@@ -644,6 +718,7 @@ class TestOllamaChatGeneratorInitSerializeDeserialize:
             "type": "haystack_integrations.components.generators.ollama.chat.chat_generator.OllamaChatGenerator",
             "init_parameters": {
                 "timeout": 120,
+                "max_retries": 0,
                 "model": "llama2",
                 "url": "custom_url",
                 "keep_alive": "5m",
@@ -683,6 +758,7 @@ class TestOllamaChatGeneratorInitSerializeDeserialize:
             "some_test_param": "test-params",
         }
         assert component.timeout == 120
+        assert component.max_retries == 0
         assert component.tools == [tool]
         assert component.response_format == {
             "type": "object",
@@ -783,6 +859,97 @@ class TestOllamaChatGeneratorRun:
         assert len(result["replies"]) == 1
         assert result["replies"][0].text == "Fine. How can I help you today?"
         assert result["replies"][0].role == "assistant"
+
+    @patch("haystack_integrations.components.generators.ollama.chat.chat_generator.Client")
+    def test_run_retries_after_failure(self, mock_client):
+        generator = OllamaChatGenerator(max_retries=1)
+
+        mock_response = ChatResponse(
+            model="qwen3:0.6b",
+            created_at="2023-12-12T14:13:43.416799Z",
+            message={"role": "assistant", "content": "Recovered after retry"},
+            done=True,
+            prompt_eval_count=1,
+            eval_count=2,
+        )
+
+        mock_client_instance = mock_client.return_value
+        mock_client_instance.chat.side_effect = [ResponseError("temporary failure", status_code=500), mock_response]
+
+        result = generator.run(messages=[ChatMessage.from_user("Hello!")])
+
+        assert mock_client_instance.chat.call_count == 2
+        assert result["replies"][0].text == "Recovered after retry"
+
+    @patch("haystack_integrations.components.generators.ollama.chat.chat_generator.Client")
+    def test_run_raises_after_retry_exhausted(self, mock_client):
+        generator = OllamaChatGenerator(max_retries=1)
+        mock_client_instance = mock_client.return_value
+        mock_client_instance.chat.side_effect = ResponseError("persistent failure", status_code=503)
+
+        with pytest.raises(ResponseError, match="persistent failure"):
+            generator.run(messages=[ChatMessage.from_user("Hello!")])
+
+        assert mock_client_instance.chat.call_count == 2
+
+    @patch("haystack_integrations.components.generators.ollama.chat.chat_generator.Client")
+    def test_run_does_not_retry_non_retryable_error(self, mock_client):
+        generator = OllamaChatGenerator(max_retries=2)
+        mock_client_instance = mock_client.return_value
+        mock_client_instance.chat.side_effect = ResponseError("bad request", status_code=400)
+
+        with pytest.raises(ResponseError, match="bad request"):
+            generator.run(messages=[ChatMessage.from_user("Hello!")])
+
+        assert mock_client_instance.chat.call_count == 1
+
+    @pytest.mark.asyncio
+    @patch("haystack_integrations.components.generators.ollama.chat.chat_generator.AsyncClient")
+    async def test_run_async_does_not_retry_non_retryable_error(self, mock_async_client):
+        generator = OllamaChatGenerator(max_retries=2)
+        mock_async_client_instance = mock_async_client.return_value
+        mock_async_client_instance.chat = AsyncMock(side_effect=ResponseError("bad request", status_code=400))
+
+        with pytest.raises(ResponseError, match="bad request"):
+            await generator.run_async(messages=[ChatMessage.from_user("Hello!")])
+
+        assert mock_async_client_instance.chat.call_count == 1
+
+    @pytest.mark.asyncio
+    @patch("haystack_integrations.components.generators.ollama.chat.chat_generator.AsyncClient")
+    async def test_run_async_retries_after_failure(self, mock_async_client):
+        generator = OllamaChatGenerator(max_retries=1)
+
+        mock_response = ChatResponse(
+            model="qwen3:0.6b",
+            created_at="2023-12-12T14:13:43.416799Z",
+            message={"role": "assistant", "content": "Recovered after retry"},
+            done=True,
+            prompt_eval_count=1,
+            eval_count=2,
+        )
+
+        mock_async_client_instance = mock_async_client.return_value
+        mock_async_client_instance.chat = AsyncMock(
+            side_effect=[ResponseError("temporary failure", status_code=500), mock_response]
+        )
+
+        result = await generator.run_async(messages=[ChatMessage.from_user("Hello!")])
+
+        assert mock_async_client_instance.chat.call_count == 2
+        assert result["replies"][0].text == "Recovered after retry"
+
+    @pytest.mark.asyncio
+    @patch("haystack_integrations.components.generators.ollama.chat.chat_generator.AsyncClient")
+    async def test_run_async_raises_after_retry_exhausted(self, mock_async_client):
+        generator = OllamaChatGenerator(max_retries=1)
+        mock_async_client_instance = mock_async_client.return_value
+        mock_async_client_instance.chat = AsyncMock(side_effect=ResponseError("persistent failure", status_code=503))
+
+        with pytest.raises(ResponseError, match="persistent failure"):
+            await generator.run_async(messages=[ChatMessage.from_user("Hello!")])
+
+        assert mock_async_client_instance.chat.call_count == 2
 
     @patch("haystack_integrations.components.generators.ollama.chat.chat_generator.Client")
     def test_run_streaming(self, mock_client):

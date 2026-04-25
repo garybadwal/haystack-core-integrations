@@ -1,5 +1,72 @@
 # Changelog
 
+## [integrations/pgvector-v6.3.0] - 2026-03-17
+
+### 🐛 Bug Fixes
+
+- PgVectorDocumentStore `_treat_meta_field` and comparison functions now return Composed - string escaping done by `psycopg` (#2964)
+
+
+## [integrations/pgvector-v6.2.0] - 2026-03-02
+
+### 🐛 Bug Fixes
+
+- Add metadata field-name validation using regex in `PGVectorDocumentStore` filters to prevent SQL injection vectors. (#2881)
+- Remove NUL bytes when converting from haystack to pg documents (#2892)
+
+### 📚 Documentation
+
+- Simplify pydoc configs (#2855)
+
+### 🧪 Testing
+
+- Replacing each `DocumentStore` specific tests and used the generalised ones from `haystack.testing.document_store` (#2812)
+
+
+## [integrations/pgvector-v6.1.0] - 2026-01-28
+
+### 🚀 Features
+
+- Adding count, filtering and metadata related operations to `PGVectorDocumentStore` (#2768)
+
+
+## [integrations/pgvector-v6.0.0] - 2026-01-12
+
+### 🧹 Chores
+
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Pgvector - drop Python 3.9 and use X|Y typing (#2722)
+
+### 🌀 Miscellaneous
+
+- Fix: Fix doc links (#2661)
+
+## [integrations/pgvector-v5.5.0] - 2026-01-02
+
+### 🚀 Features
+
+- Adding `update_by_filter` and `delete_by_filter` to PgVector document store (#2647)
+
+
+## [integrations/pgvector-v5.4.0] - 2025-12-05
+
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+- Pgvector - document expected connection string and raise informative error (#2583)
+
+### 🌀 Miscellaneous
+
+- Enhancement: Adopt PEP 585 type hinting (part 5) (#2528)
+
 ## [integrations/pgvector-v5.3.0] - 2025-10-17
 
 ### 🚀 Features

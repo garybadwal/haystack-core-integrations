@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from haystack import Document, component, default_from_dict, default_to_dict
 from haystack.dataclasses.sparse_embedding import SparseEmbedding
@@ -43,14 +43,14 @@ class QdrantEmbeddingRetriever:
     def __init__(
         self,
         document_store: QdrantDocumentStore,
-        filters: Optional[Union[Dict[str, Any], models.Filter]] = None,
+        filters: dict[str, Any] | models.Filter | None = None,
         top_k: int = 10,
         scale_score: bool = False,
         return_embedding: bool = False,
-        filter_policy: Union[str, FilterPolicy] = FilterPolicy.REPLACE,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
+        filter_policy: str | FilterPolicy = FilterPolicy.REPLACE,
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
     ) -> None:
         """
         Create a QdrantEmbeddingRetriever component.
@@ -89,7 +89,7 @@ class QdrantEmbeddingRetriever:
         self._group_by = group_by
         self._group_size = group_size
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -113,7 +113,7 @@ class QdrantEmbeddingRetriever:
         return d
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "QdrantEmbeddingRetriever":
+    def from_dict(cls, data: dict[str, Any]) -> "QdrantEmbeddingRetriever":
         """
         Deserializes the component from a dictionary.
 
@@ -130,18 +130,18 @@ class QdrantEmbeddingRetriever:
             data["init_parameters"]["filter_policy"] = FilterPolicy.from_str(filter_policy)
         return default_from_dict(cls, data)
 
-    @component.output_types(documents=List[Document])
+    @component.output_types(documents=list[Document])
     def run(
         self,
-        query_embedding: List[float],
-        filters: Optional[Union[Dict[str, Any], models.Filter]] = None,
-        top_k: Optional[int] = None,
-        scale_score: Optional[bool] = None,
-        return_embedding: Optional[bool] = None,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
-    ) -> Dict[str, List[Document]]:
+        query_embedding: list[float],
+        filters: dict[str, Any] | models.Filter | None = None,
+        top_k: int | None = None,
+        scale_score: bool | None = None,
+        return_embedding: bool | None = None,
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
+    ) -> dict[str, list[Document]]:
         """
         Run the Embedding Retriever on the given input data.
 
@@ -185,18 +185,18 @@ class QdrantEmbeddingRetriever:
 
         return {"documents": docs}
 
-    @component.output_types(documents=List[Document])
+    @component.output_types(documents=list[Document])
     async def run_async(
         self,
-        query_embedding: List[float],
-        filters: Optional[Union[Dict[str, Any], models.Filter]] = None,
-        top_k: Optional[int] = None,
-        scale_score: Optional[bool] = None,
-        return_embedding: Optional[bool] = None,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
-    ) -> Dict[str, List[Document]]:
+        query_embedding: list[float],
+        filters: dict[str, Any] | models.Filter | None = None,
+        top_k: int | None = None,
+        scale_score: bool | None = None,
+        return_embedding: bool | None = None,
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
+    ) -> dict[str, list[Document]]:
         """
         Asynchronously run the Embedding Retriever on the given input data.
 
@@ -271,14 +271,14 @@ class QdrantSparseEmbeddingRetriever:
     def __init__(
         self,
         document_store: QdrantDocumentStore,
-        filters: Optional[Union[Dict[str, Any], models.Filter]] = None,
+        filters: dict[str, Any] | models.Filter | None = None,
         top_k: int = 10,
         scale_score: bool = False,
         return_embedding: bool = False,
-        filter_policy: Union[str, FilterPolicy] = FilterPolicy.REPLACE,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
+        filter_policy: str | FilterPolicy = FilterPolicy.REPLACE,
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
     ) -> None:
         """
         Create a QdrantSparseEmbeddingRetriever component.
@@ -317,7 +317,7 @@ class QdrantSparseEmbeddingRetriever:
         self._group_by = group_by
         self._group_size = group_size
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -341,7 +341,7 @@ class QdrantSparseEmbeddingRetriever:
         return d
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "QdrantSparseEmbeddingRetriever":
+    def from_dict(cls, data: dict[str, Any]) -> "QdrantSparseEmbeddingRetriever":
         """
         Deserializes the component from a dictionary.
 
@@ -358,18 +358,18 @@ class QdrantSparseEmbeddingRetriever:
             data["init_parameters"]["filter_policy"] = FilterPolicy.from_str(filter_policy)
         return default_from_dict(cls, data)
 
-    @component.output_types(documents=List[Document])
+    @component.output_types(documents=list[Document])
     def run(
         self,
         query_sparse_embedding: SparseEmbedding,
-        filters: Optional[Union[Dict[str, Any], models.Filter]] = None,
-        top_k: Optional[int] = None,
-        scale_score: Optional[bool] = None,
-        return_embedding: Optional[bool] = None,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
-    ) -> Dict[str, List[Document]]:
+        filters: dict[str, Any] | models.Filter | None = None,
+        top_k: int | None = None,
+        scale_score: bool | None = None,
+        return_embedding: bool | None = None,
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
+    ) -> dict[str, list[Document]]:
         """
         Run the Sparse Embedding Retriever on the given input data.
 
@@ -418,18 +418,18 @@ class QdrantSparseEmbeddingRetriever:
 
         return {"documents": docs}
 
-    @component.output_types(documents=List[Document])
+    @component.output_types(documents=list[Document])
     async def run_async(
         self,
         query_sparse_embedding: SparseEmbedding,
-        filters: Optional[Union[Dict[str, Any], models.Filter]] = None,
-        top_k: Optional[int] = None,
-        scale_score: Optional[bool] = None,
-        return_embedding: Optional[bool] = None,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
-    ) -> Dict[str, List[Document]]:
+        filters: dict[str, Any] | models.Filter | None = None,
+        top_k: int | None = None,
+        scale_score: bool | None = None,
+        return_embedding: bool | None = None,
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
+    ) -> dict[str, list[Document]]:
         """
         Asynchronously run the Sparse Embedding Retriever on the given input data.
 
@@ -482,8 +482,9 @@ class QdrantSparseEmbeddingRetriever:
 @component
 class QdrantHybridRetriever:
     """
-    A component for retrieving documents from an QdrantDocumentStore using both dense and sparse vectors
-    and fusing the results using Reciprocal Rank Fusion.
+    A component for retrieving documents from a QdrantDocumentStore using both dense and sparse vectors.
+
+    Fuses the results using Reciprocal Rank Fusion.
 
     Usage example:
     ```python
@@ -515,13 +516,13 @@ class QdrantHybridRetriever:
     def __init__(
         self,
         document_store: QdrantDocumentStore,
-        filters: Optional[Union[Dict[str, Any], models.Filter]] = None,
+        filters: dict[str, Any] | models.Filter | None = None,
         top_k: int = 10,
         return_embedding: bool = False,
-        filter_policy: Union[str, FilterPolicy] = FilterPolicy.REPLACE,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
+        filter_policy: str | FilterPolicy = FilterPolicy.REPLACE,
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
     ) -> None:
         """
         Create a QdrantHybridRetriever component.
@@ -558,7 +559,7 @@ class QdrantHybridRetriever:
         self._group_by = group_by
         self._group_size = group_size
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
@@ -578,7 +579,7 @@ class QdrantHybridRetriever:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "QdrantHybridRetriever":
+    def from_dict(cls, data: dict[str, Any]) -> "QdrantHybridRetriever":
         """
         Deserializes the component from a dictionary.
 
@@ -595,18 +596,18 @@ class QdrantHybridRetriever:
             data["init_parameters"]["filter_policy"] = FilterPolicy.from_str(filter_policy)
         return default_from_dict(cls, data)
 
-    @component.output_types(documents=List[Document])
+    @component.output_types(documents=list[Document])
     def run(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         query_sparse_embedding: SparseEmbedding,
-        filters: Optional[Union[Dict[str, Any], models.Filter]] = None,
-        top_k: Optional[int] = None,
-        return_embedding: Optional[bool] = None,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
-    ) -> Dict[str, List[Document]]:
+        filters: dict[str, Any] | models.Filter | None = None,
+        top_k: int | None = None,
+        return_embedding: bool | None = None,
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
+    ) -> dict[str, list[Document]]:
         """
         Run the Sparse Embedding Retriever on the given input data.
 
@@ -655,18 +656,18 @@ class QdrantHybridRetriever:
 
         return {"documents": docs}
 
-    @component.output_types(documents=List[Document])
+    @component.output_types(documents=list[Document])
     async def run_async(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         query_sparse_embedding: SparseEmbedding,
-        filters: Optional[Union[Dict[str, Any], models.Filter]] = None,
-        top_k: Optional[int] = None,
-        return_embedding: Optional[bool] = None,
-        score_threshold: Optional[float] = None,
-        group_by: Optional[str] = None,
-        group_size: Optional[int] = None,
-    ) -> Dict[str, List[Document]]:
+        filters: dict[str, Any] | models.Filter | None = None,
+        top_k: int | None = None,
+        return_embedding: bool | None = None,
+        score_threshold: float | None = None,
+        group_by: str | None = None,
+        group_size: int | None = None,
+    ) -> dict[str, list[Document]]:
         """
         Asynchronously run the Sparse Embedding Retriever on the given input data.
 

@@ -1,5 +1,10 @@
-from unittest.mock import MagicMock
+# SPDX-FileCopyrightText: 2024-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
 
+from unittest.mock import MagicMock, patch
+
+import numpy as np
 import pytest
 from haystack import Document, default_from_dict
 
@@ -211,20 +216,6 @@ class TestFastembedRanker:
         ):
             ranker.run(query=query, documents=list_document, top_k=-3)
 
-    def test_run_no_warmup(self):
-        """
-        Test for checking error when calling without a warmup.
-        """
-        ranker = FastembedRanker(model_name="Xenova/ms-marco-MiniLM-L-12-v2")
-
-        query = "query"
-        list_document = [Document("Document 1")]
-
-        with pytest.raises(
-            RuntimeError,
-        ):
-            ranker.run(query=query, documents=list_document)
-
     def test_run_empty_document_list(self):
         """
         Test for no error when sending no documents.
@@ -247,6 +238,7 @@ class TestFastembedRanker:
             meta_fields_to_embed=["meta_field"],
         )
         ranker._model = MagicMock()
+        ranker._model.rerank.return_value = [np.random.rand(3, 16).tolist() for _ in range(5)]
 
         documents = [Document(content=f"document-number {i}", meta={"meta_field": f"meta_value {i}"}) for i in range(5)]
         query = "test"
@@ -265,10 +257,23 @@ class TestFastembedRanker:
             parallel=None,
         )
 
+    def test_run_calls_warm_up(self):
+        """
+        Unit test to check that warm_up is called when run is called for the first time.
+        """
+        ranker = FastembedRanker()
+
+        mock_model = MagicMock()
+        mock_model.rerank.return_value = [0.5]
+
+        with patch.object(ranker, "warm_up", side_effect=lambda: setattr(ranker, "_model", mock_model)) as mock_warm_up:
+            ranker.run(query="test query", documents=[Document(content="test document")])
+
+        mock_warm_up.assert_called_once()
+
     @pytest.mark.integration
     def test_run(self):
         ranker = FastembedRanker(model_name="Xenova/ms-marco-MiniLM-L-6-v2", top_k=2)
-        ranker.warm_up()
 
         query = "Who is maintaining Qdrant?"
         documents = [

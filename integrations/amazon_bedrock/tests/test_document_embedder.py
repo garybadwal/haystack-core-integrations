@@ -1,5 +1,6 @@
 import io
-from typing import Any, Dict, Optional
+import os
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -10,7 +11,9 @@ from haystack_integrations.common.amazon_bedrock.errors import (
     AmazonBedrockConfigurationError,
     AmazonBedrockInferenceError,
 )
-from haystack_integrations.components.embedders.amazon_bedrock import AmazonBedrockDocumentEmbedder
+from haystack_integrations.components.embedders.amazon_bedrock import (
+    AmazonBedrockDocumentEmbedder,
+)
 
 TYPE = "haystack_integrations.components.embedders.amazon_bedrock.document_embedder.AmazonBedrockDocumentEmbedder"
 
@@ -65,7 +68,7 @@ class TestAmazonBedrockDocumentEmbedder:
             )
 
     @pytest.mark.parametrize("boto3_config", [None, {"read_timeout": 1000}])
-    def test_to_dict(self, mock_boto3_session: Any, boto3_config: Optional[Dict[str, Any]]):
+    def test_to_dict(self, mock_boto3_session: Any, boto3_config: dict[str, Any] | None):
         embedder = AmazonBedrockDocumentEmbedder(
             model="cohere.embed-english-v3",
             input_type="search_document",
@@ -75,11 +78,31 @@ class TestAmazonBedrockDocumentEmbedder:
         expected_dict = {
             "type": TYPE,
             "init_parameters": {
-                "aws_access_key_id": {"type": "env_var", "env_vars": ["AWS_ACCESS_KEY_ID"], "strict": False},
-                "aws_secret_access_key": {"type": "env_var", "env_vars": ["AWS_SECRET_ACCESS_KEY"], "strict": False},
-                "aws_session_token": {"type": "env_var", "env_vars": ["AWS_SESSION_TOKEN"], "strict": False},
-                "aws_region_name": {"type": "env_var", "env_vars": ["AWS_DEFAULT_REGION"], "strict": False},
-                "aws_profile_name": {"type": "env_var", "env_vars": ["AWS_PROFILE"], "strict": False},
+                "aws_access_key_id": {
+                    "type": "env_var",
+                    "env_vars": ["AWS_ACCESS_KEY_ID"],
+                    "strict": False,
+                },
+                "aws_secret_access_key": {
+                    "type": "env_var",
+                    "env_vars": ["AWS_SECRET_ACCESS_KEY"],
+                    "strict": False,
+                },
+                "aws_session_token": {
+                    "type": "env_var",
+                    "env_vars": ["AWS_SESSION_TOKEN"],
+                    "strict": False,
+                },
+                "aws_region_name": {
+                    "type": "env_var",
+                    "env_vars": ["AWS_DEFAULT_REGION"],
+                    "strict": False,
+                },
+                "aws_profile_name": {
+                    "type": "env_var",
+                    "env_vars": ["AWS_PROFILE"],
+                    "strict": False,
+                },
                 "model": "cohere.embed-english-v3",
                 "input_type": "search_document",
                 "batch_size": 32,
@@ -93,15 +116,35 @@ class TestAmazonBedrockDocumentEmbedder:
         assert embedder.to_dict() == expected_dict
 
     @pytest.mark.parametrize("boto3_config", [None, {"read_timeout": 1000}])
-    def test_from_dict(self, mock_boto3_session: Any, boto3_config: Optional[Dict[str, Any]]):
+    def test_from_dict(self, mock_boto3_session: Any, boto3_config: dict[str, Any] | None):
         data = {
             "type": TYPE,
             "init_parameters": {
-                "aws_access_key_id": {"type": "env_var", "env_vars": ["AWS_ACCESS_KEY_ID"], "strict": False},
-                "aws_secret_access_key": {"type": "env_var", "env_vars": ["AWS_SECRET_ACCESS_KEY"], "strict": False},
-                "aws_session_token": {"type": "env_var", "env_vars": ["AWS_SESSION_TOKEN"], "strict": False},
-                "aws_region_name": {"type": "env_var", "env_vars": ["AWS_DEFAULT_REGION"], "strict": False},
-                "aws_profile_name": {"type": "env_var", "env_vars": ["AWS_PROFILE"], "strict": False},
+                "aws_access_key_id": {
+                    "type": "env_var",
+                    "env_vars": ["AWS_ACCESS_KEY_ID"],
+                    "strict": False,
+                },
+                "aws_secret_access_key": {
+                    "type": "env_var",
+                    "env_vars": ["AWS_SECRET_ACCESS_KEY"],
+                    "strict": False,
+                },
+                "aws_session_token": {
+                    "type": "env_var",
+                    "env_vars": ["AWS_SESSION_TOKEN"],
+                    "strict": False,
+                },
+                "aws_region_name": {
+                    "type": "env_var",
+                    "env_vars": ["AWS_DEFAULT_REGION"],
+                    "strict": False,
+                },
+                "aws_profile_name": {
+                    "type": "env_var",
+                    "env_vars": ["AWS_PROFILE"],
+                    "strict": False,
+                },
                 "model": "cohere.embed-english-v3",
                 "input_type": "search_document",
                 "batch_size": 32,
@@ -150,11 +193,17 @@ class TestAmazonBedrockDocumentEmbedder:
 
     def test_prepare_texts_to_embed_w_metadata(self, mock_boto3_session):
         documents = [
-            Document(content=f"document number {i}: content", meta={"meta_field": f"meta_value {i}"}) for i in range(5)
+            Document(
+                content=f"document number {i}: content",
+                meta={"meta_field": f"meta_value {i}"},
+            )
+            for i in range(5)
         ]
 
         embedder = AmazonBedrockDocumentEmbedder(
-            model="cohere.embed-english-v3", meta_fields_to_embed=["meta_field"], embedding_separator=" | "
+            model="cohere.embed-english-v3",
+            meta_fields_to_embed=["meta_field"],
+            embedding_separator=" | ",
         )
 
         prepared_texts = embedder._prepare_texts_to_embed(documents)
@@ -167,12 +216,19 @@ class TestAmazonBedrockDocumentEmbedder:
             "meta_value 4 | document number 4: content",
         ]
 
-    def test_embed_cohere(self, mock_boto3_session):
+    @pytest.mark.parametrize(
+        "response_body",
+        [
+            '{"embeddings": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]}',  # embeddings as list of lists
+            '{"embeddings": {"float": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]}}',  # dict with embedding type as key
+        ],
+    )
+    def test_embed_cohere(self, mock_boto3_session, response_body):
         embedder = AmazonBedrockDocumentEmbedder(model="cohere.embed-english-v3")
 
         with patch.object(embedder, "_client") as mock_client:
             mock_client.invoke_model.return_value = {
-                "body": io.StringIO('{"embeddings": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]}'),
+                "body": io.StringIO(response_body),
             }
 
             docs = [Document(content="some text"), Document(content="some other text")]
@@ -248,3 +304,99 @@ class TestAmazonBedrockDocumentEmbedder:
         for i, doc in enumerate(result):
             assert doc.content == docs[i].content
             assert doc.embedding == [0.1, 0.2, 0.3]
+
+    def test_run_cohere_does_not_modify_original_documents(self, mock_boto3_session):
+        embedder = AmazonBedrockDocumentEmbedder(model="cohere.embed-english-v3")
+
+        original_docs = [
+            Document(content="test 1", id="doc1"),
+            Document(content="test 2", id="doc2"),
+        ]
+
+        # Store original IDs to verify they're the same objects
+        original_doc_ids = [id(doc) for doc in original_docs]
+        original_embeddings = [doc.embedding for doc in original_docs]
+
+        with patch.object(embedder, "_client") as mock_client:
+            mock_client.invoke_model.return_value = {
+                "body": io.StringIO('{"embeddings": [[0.1, 0.2], [0.3, 0.4]]}'),
+            }
+
+            result = embedder.run(documents=original_docs)
+
+        # Verify originals are unchanged
+        assert all(doc.embedding is None for doc in original_docs)
+        assert original_embeddings == [None, None]
+
+        # Verify returned documents are NEW instances
+        returned_doc_ids = [id(doc) for doc in result["documents"]]
+        assert original_doc_ids != returned_doc_ids
+
+        # Verify returned documents have embeddings
+        assert result["documents"][0].embedding == [0.1, 0.2]
+        assert result["documents"][1].embedding == [0.3, 0.4]
+        assert result["documents"][0].content == "test 1"
+        assert result["documents"][1].content == "test 2"
+
+    def test_run_titan_does_not_modify_original_documents(self, mock_boto3_session):
+        embedder = AmazonBedrockDocumentEmbedder(model="amazon.titan-embed-text-v1")
+
+        original_docs = [
+            Document(content="test 1", id="doc1"),
+            Document(content="test 2", id="doc2"),
+        ]
+
+        # Store original IDs to verify they're the same objects
+        original_doc_ids = [id(doc) for doc in original_docs]
+        original_embeddings = [doc.embedding for doc in original_docs]
+
+        with patch.object(embedder, "_client") as mock_client:
+            # Titan returns one embedding at a time
+            mock_client.invoke_model.side_effect = [
+                {"body": io.StringIO('{"embedding": [0.1, 0.2]}')},
+                {"body": io.StringIO('{"embedding": [0.3, 0.4]}')},
+            ]
+
+            result = embedder.run(documents=original_docs)
+
+        # Verify originals are unchanged
+        assert all(doc.embedding is None for doc in original_docs)
+        assert original_embeddings == [None, None]
+
+        # Verify returned documents are NEW instances
+        returned_doc_ids = [id(doc) for doc in result["documents"]]
+        assert original_doc_ids != returned_doc_ids
+
+        # Verify returned documents have embeddings
+        assert result["documents"][0].embedding == [0.1, 0.2]
+        assert result["documents"][1].embedding == [0.3, 0.4]
+        assert result["documents"][0].content == "test 1"
+        assert result["documents"][1].content == "test 2"
+
+    @pytest.mark.integration
+    @pytest.mark.skipif(
+        not os.getenv("AWS_ACCESS_KEY_ID")
+        or not os.getenv("AWS_SECRET_ACCESS_KEY")
+        or not os.getenv("AWS_DEFAULT_REGION"),
+        reason="AWS credentials are not set",
+    )
+    @pytest.mark.parametrize(
+        "model",
+        ["cohere.embed-v4:0", "cohere.embed-english-v3", "amazon.titan-embed-text-v1"],
+    )
+    def test_live_run(self, model):
+        embedder = AmazonBedrockDocumentEmbedder(model=model)
+
+        documents = [
+            Document(content="this is a test document"),
+            Document(content="I love pizza"),
+        ]
+
+        docs_with_embeddings = embedder.run(documents=documents)["documents"]
+
+        assert docs_with_embeddings[0].content == "this is a test document"
+        assert docs_with_embeddings[1].content == "I love pizza"
+        for doc in docs_with_embeddings:
+            assert isinstance(doc.embedding, list)
+            assert all(isinstance(embedding, float) for embedding in doc.embedding)
+            assert len(doc.embedding) > 1000

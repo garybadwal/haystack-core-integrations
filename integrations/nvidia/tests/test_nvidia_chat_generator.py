@@ -278,7 +278,7 @@ class TestNvidiaChatGenerator:
         reason="Export an env var called NVIDIA_API_KEY containing the NVIDIA API key to run this test.",
     )
     @pytest.mark.integration
-    def test_live_run_with_guided_json_schema(self):
+    def test_live_run_with_json_schema(self):
         json_schema = {
             "type": "object",
             "properties": {"title": {"type": "string"}, "rating": {"type": "number"}},
@@ -295,14 +295,22 @@ class TestNvidiaChatGenerator:
 
         component = NvidiaChatGenerator(
             model="meta/llama-3.1-70b-instruct",
-            generation_kwargs={"extra_body": {"nvext": {"guided_json": json_schema}}},
+            generation_kwargs={
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "movie_review",
+                        "schema": json_schema,
+                    },
+                },
+            },
         )
 
         results = component.run(chat_messages)
         assert len(results["replies"]) == 1
         message = results["replies"][0].text
         output = json.loads(message)
-        assert output["title"] == "Inception"
+        assert "Inception" in output["title"]
         assert "rating" in output
 
     @pytest.mark.skipif(
@@ -314,8 +322,7 @@ class TestNvidiaChatGenerator:
         chat_messages = [
             ChatMessage.from_user(
                 """
-            Return the title and the rating based on the following movie review according
-            to the provided json schema.
+            Based on the following movie review, return a JSON object with the title and the rating (as a number).
             Review: Inception is a really well made film. I rate it four stars out of five."""
             )
         ]

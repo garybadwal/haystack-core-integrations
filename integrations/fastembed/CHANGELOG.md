@@ -1,5 +1,68 @@
 # Changelog
 
+## [integrations/fastembed-v2.2.0] - 2026-04-16
+
+### 🚀 Features
+
+- Update `FastembedRanker` to auto call `warm_up` on first run (#2834)
+- Add FastembedLateInteractionRanker for ColBERT late-interaction reranking (#3135)
+
+### 🐛 Bug Fixes
+
+- Replace in-place dataclass mutations with dataclasses.replace() (#3112)
+
+### 📚 Documentation
+
+- *(fastembed)* Remove explicit warm_up from examples (#2830)
+- Simplify pydoc configs (#2855)
+
+### 🧪 Testing
+
+- Track test coverage for all integrations (#3065)
+
+### 🧹 Chores
+
+- Add ANN type annotations to faiss, fastembed, firecrawl, github, google_ai (#2988)
+- Enforce ruff docstring rules (D102/D103/D205/D209/D213/D417/D419) in integrations 11-20 (#3009)
+
+### 🌀 Miscellaneous
+
+- Fix typing issue
+- Fix tying
+
+## [integrations/fastembed-v2.0.0] - 2026-01-12
+
+### 🧹 Chores
+
+- [**breaking**] Fastembed - drop Python 3.9 and use X|Y typing (#2698)
+
+
+## [integrations/fastembed-v1.6.0] - 2026-01-09
+
+### 🚀 Features
+
+- Update FastEmbed components to auto call run `warm_up` and don't modify Documents in place (#2678)
+
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Remove black (#1985)
+- Standardize readmes - part 1 (#2202)
+- Fix linting fastembed (#2254)
+- Remove Readme API CI workflow and configs (#2573)
+- Make fmt command more forgiving (#2671)
+
+### 🌀 Miscellaneous
+
+- Adopt PEP 585 type hinting (part 3) (#2510)
+
 ## [integrations/fastembed-v1.5.0] - 2025-06-17
 
 ### 🐛 Bug Fixes

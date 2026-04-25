@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from haystack import component, default_from_dict, default_to_dict, logging
 from haystack.components.generators.chat import OpenAIChatGenerator
@@ -10,6 +10,8 @@ from haystack.dataclasses import StreamingCallbackT
 from haystack.tools import ToolsType, deserialize_tools_or_toolset_inplace, serialize_tools_or_toolset
 from haystack.utils import deserialize_callable, serialize_callable
 from haystack.utils.auth import Secret
+from openai.lib._pydantic import to_strict_json_schema
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,7 @@ logger = logging.getLogger(__name__)
 class LlamaStackChatGenerator(OpenAIChatGenerator):
     """
     Enables text generation using Llama Stack framework.
+
     Llama Stack Server supports multiple inference providers, including Ollama, Together,
     and vLLM and other cloud providers.
     For a complete list of inference providers, see [Llama Stack docs](https://llama-stack.readthedocs.io/en/latest/providers/inference/index.html).
@@ -57,19 +60,21 @@ class LlamaStackChatGenerator(OpenAIChatGenerator):
         self,
         *,
         model: str,
-        api_base_url: str = "http://localhost:8321/v1/openai/v1",
-        organization: Optional[str] = None,
-        streaming_callback: Optional[StreamingCallbackT] = None,
-        generation_kwargs: Optional[Dict[str, Any]] = None,
-        timeout: Optional[int] = None,
-        tools: Optional[ToolsType] = None,
+        api_base_url: str = "http://localhost:8321/v1",
+        organization: str | None = None,
+        streaming_callback: StreamingCallbackT | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+        timeout: int | None = None,
+        tools: ToolsType | None = None,
         tools_strict: bool = False,
-        max_retries: Optional[int] = None,
-        http_client_kwargs: Optional[Dict[str, Any]] = None,
-    ):
+        max_retries: int | None = None,
+        http_client_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """
-        Creates an instance of LlamaStackChatGenerator. To use this chat generator,
-        you need to setup Llama Stack Server with an inference provider and have a model available.
+        Creates an instance of LlamaStackChatGenerator.
+
+        To use this chat generator, you need to setup Llama Stack Server with an inference provider and have a model
+        available.
 
         :param model:
             The name of the model to use for chat completion.
@@ -94,6 +99,13 @@ class LlamaStackChatGenerator(OpenAIChatGenerator):
                 events as they become available, with the stream terminated by a data: [DONE] message.
             - `safe_prompt`: Whether to inject a safety prompt before all conversations.
             - `random_seed`: The seed to use for random sampling.
+            - `response_format`: A JSON schema or a Pydantic model that enforces the structure of the model's response.
+                If provided, the output will always be validated against this
+                format (unless the model returns a tool call).
+                For details, see the [OpenAI Structured Outputs documentation](https://platform.openai.com/docs/guides/structured-outputs).
+                Notes:
+                - For structured outputs with streaming,
+                  the `response_format` must be a JSON schema and not a Pydantic model.
         :param timeout:
             Timeout for client calls using OpenAI API. If not set, it defaults to either the
             `OPENAI_TIMEOUT` environment variable, or 30 seconds.
@@ -129,7 +141,7 @@ class LlamaStackChatGenerator(OpenAIChatGenerator):
             http_client_kwargs=http_client_kwargs,
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize this component to a dictionary.
 
@@ -137,13 +149,29 @@ class LlamaStackChatGenerator(OpenAIChatGenerator):
             The serialized component as a dictionary.
         """
         callback_name = serialize_callable(self.streaming_callback) if self.streaming_callback else None
+        generation_kwargs = self.generation_kwargs.copy()
+        response_format = generation_kwargs.get("response_format")
+        # If the response format is a Pydantic model, it's converted to openai's json schema format
+        # If it's already a json schema, it's left as is
+        if response_format and isinstance(response_format, type) and issubclass(response_format, BaseModel):
+            json_schema = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": response_format.__name__,
+                    "strict": True,
+                    "schema": to_strict_json_schema(response_format),
+                },
+            }
+
+            generation_kwargs["response_format"] = json_schema
+
         return default_to_dict(
             self,
             model=self.model,
             streaming_callback=callback_name,
             api_base_url=self.api_base_url,
             organization=self.organization,
-            generation_kwargs=self.generation_kwargs,
+            generation_kwargs=generation_kwargs,
             timeout=self.timeout,
             max_retries=self.max_retries,
             tools=serialize_tools_or_toolset(self.tools),
@@ -152,7 +180,7 @@ class LlamaStackChatGenerator(OpenAIChatGenerator):
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LlamaStackChatGenerator":
+    def from_dict(cls, data: dict[str, Any]) -> "LlamaStackChatGenerator":
         """
         Deserialize this component from a dictionary.
 

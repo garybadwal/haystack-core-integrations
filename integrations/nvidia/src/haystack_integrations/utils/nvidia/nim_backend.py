@@ -4,7 +4,7 @@
 
 import os
 import warnings
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal
 
 import requests
 from haystack import logging
@@ -23,13 +23,13 @@ class NimBackend:
     def __init__(
         self,
         api_url: str,
-        model_type: Optional[Literal["chat", "embedding", "ranking"]] = None,
-        model: Optional[str] = None,
-        api_key: Optional[Secret] = Secret.from_env_var("NVIDIA_API_KEY"),
-        model_kwargs: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[str, Client]] = None,
-        timeout: Optional[float] = None,
-    ):
+        model_type: Literal["chat", "embedding", "ranking"] | None = None,
+        model: str | None = None,
+        api_key: Secret | None = Secret.from_env_var("NVIDIA_API_KEY"),
+        model_kwargs: dict[str, Any] | None = None,
+        client: str | Client | None = None,
+        timeout: float | None = None,
+    ) -> None:
         headers = {
             "Content-Type": "application/json",
             "accept": "application/json",
@@ -44,7 +44,7 @@ class NimBackend:
         self.api_url = api_url
         if isinstance(client, str):
             client = Client.from_str(client)
-        validated_model: Optional[Model] = None
+        validated_model: Model | None = None
         if is_hosted(self.api_url):
             if not api_key:
                 warnings.warn(
@@ -73,7 +73,8 @@ class NimBackend:
             timeout = float(os.environ.get("NVIDIA_TIMEOUT", REQUEST_TIMEOUT))
         self.timeout = timeout
 
-    def embed(self, texts: List[str]) -> Tuple[List[List[float]], Dict[str, Any]]:
+    def embed(self, texts: list[str]) -> tuple[list[list[float]], dict[str, Any]]:
+        """Compute embeddings for a list of texts via the NIM API."""
         url = f"{self.api_url}/embeddings"
 
         try:
@@ -98,7 +99,8 @@ class NimBackend:
 
         return embeddings, {"usage": data["usage"]}
 
-    def generate(self, prompt: str) -> Tuple[List[str], List[Dict[str, Any]]]:
+    def generate(self, prompt: str) -> tuple[list[str], list[dict[str, Any]]]:
+        """Generate text completions for a prompt via the NIM API."""
         # We're using the chat completion endpoint as the NIM API doesn't support
         # the /completions endpoint. So both the non-chat and chat generator will use this.
         # This is the same for local containers and the cloud API.
@@ -151,7 +153,8 @@ class NimBackend:
 
         return replies, meta
 
-    def models(self) -> List[Model]:
+    def models(self) -> list[Model]:
+        """Retrieve available models from the NIM API."""
         url = f"{self.api_url}/models"
 
         res = self.session.get(
@@ -174,7 +177,8 @@ class NimBackend:
             raise ValueError(msg)
         return models
 
-    def rank(self, query_text: str, document_texts: List[str]) -> List[Dict[str, Any]]:
+    def rank(self, query_text: str, document_texts: list[str]) -> list[dict[str, Any]]:
+        """Rank documents by relevance to a query via the NIM API."""
         url = self.api_url
 
         try:

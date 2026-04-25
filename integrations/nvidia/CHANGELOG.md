@@ -1,5 +1,67 @@
 # Changelog
 
+## [integrations/nvidia-v1.1.1] - 2026-04-14
+
+### 🐛 Bug Fixes
+
+- Replace in-place dataclass mutations with dataclasses.replace() (#3112)
+
+### 🧪 Testing
+
+- Track test coverage for all integrations (#3065)
+- Add unit tests for Nvidia integration (#3162)
+
+
+## [integrations/nvidia-v1.1.0] - 2026-03-30
+
+### 🐛 Bug Fixes
+
+- Nvidia - fix structured output syntax (#3058)
+
+### 📚 Documentation
+
+- *(nvidia)* Remove explicit warm_up from examples (#2843)
+- Simplify pydoc configs (#2855)
+
+### 🧪 Testing
+
+- Test compatible integrations with python 3.14; update pyproject (#3001)
+
+### 🧹 Chores
+
+- Add ANN ruff ruleset to llama_cpp, llama_stack, mcp, meta_llama, mistral, mongodb_atlas, nvidia, ollama, openrouter, opensearch (#2991)
+- Enforce ruff docstring rules (D102/D103/D205/D209/D213/D417/D419) in integrations 21-30 (#3010)
+
+## [integrations/nvidia-v1.0.0] - 2026-01-13
+
+### 🧹 Chores
+
+- [**breaking**] Nvidia - drop Python 3.9 and use X|Y typing; fix default reranking model; improve tests (#2736)
+
+
+## [integrations/nvidia-v0.5.0] - 2026-01-13
+
+### 🚀 Features
+
+- Update Nvidia components to auto call run `warm_up` and don't modify Documents in place (#2680)
+
+### 📚 Documentation
+
+- Add NvidiaChatGenerator to pydoc configs (#2448)
+
+### ⚙️ CI
+
+- Change pytest command (#2475)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+- Make fmt command more forgiving (#2671)
+
+### 🌀 Miscellaneous
+
+- Enhancement: Adopt PEP 585 type hinting (part 4) (#2527)
+
 ## [integrations/nvidia-v0.4.0] - 2025-10-23
 
 ### 🚀 Features

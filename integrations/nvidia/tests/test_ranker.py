@@ -4,7 +4,7 @@
 
 import os
 import re
-from typing import Any, Optional, Union
+from typing import Any
 
 import pytest
 from haystack import Document
@@ -46,12 +46,6 @@ class TestNvidiaRanker:
         client = NvidiaRanker(api_url=url)
         assert client.api_url == url
 
-    def test_warm_up_required(self):
-        client = NvidiaRanker()
-        with pytest.raises(RuntimeError) as e:
-            client.run("query", [Document(content="doc")])
-        assert "not been loaded" in str(e.value)
-
     @pytest.mark.parametrize(
         "truncate",
         [
@@ -67,7 +61,7 @@ class TestNvidiaRanker:
         self,
         requests_mock,
         monkeypatch,
-        truncate: Optional[Union[RankerTruncateMode, str]],
+        truncate: RankerTruncateMode | str | None,
     ) -> None:
         query = "What is it?"
         documents = [
@@ -153,11 +147,11 @@ class TestNvidiaRanker:
     def test_integration(
         self,
     ) -> None:
-        query = "What is it?"
+        query = "Capital of France"
         documents = [
-            Document(content="Nothing really."),
-            Document(content="Maybe something."),
-            Document(content="Not this."),
+            Document(content="Lyon"),
+            Document(content="Paris"),
+            Document(content="London"),
         ]
 
         client = NvidiaRanker(top_k=2)
@@ -166,7 +160,8 @@ class TestNvidiaRanker:
         response = client.run(query=query, documents=documents)["documents"]
 
         assert len(response) == 2
-        assert {response[0].content, response[1].content} == {documents[0].content, documents[1].content}
+        assert response[0].content == "Paris"
+        assert response[1].content == "Lyon"
 
     @pytest.mark.skipif(
         not os.environ.get("NVIDIA_NIM_RANKER_MODEL", None)
@@ -334,6 +329,20 @@ class TestNvidiaRanker:
         client = NvidiaRanker()
         client.warm_up()
         assert client.backend.timeout == 45.0
+
+    def test_run_on_empty_list(self, monkeypatch):
+        monkeypatch.setenv("NVIDIA_API_KEY", "fake-api-key")
+        client = NvidiaRanker()
+        client.warm_up()
+        assert client.run(query="q", documents=[]) == {"documents": []}
+
+    def test_run_without_prior_warm_up(self, requests_mock, monkeypatch):
+        monkeypatch.setenv("NVIDIA_API_KEY", "fake-api-key")
+        requests_mock.post(re.compile(r".*ranking"), json={"rankings": [{"index": 0, "logit": 1.0}]})
+        client = NvidiaRanker()
+        result = client.run(query="q", documents=[Document(content="doc")])
+        assert client._initialized is True
+        assert len(result["documents"]) == 1
 
     def test_prepare_texts_to_embed_w_metadata(self):
         documents = [

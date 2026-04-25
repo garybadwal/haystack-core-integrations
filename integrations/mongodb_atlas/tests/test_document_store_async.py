@@ -1,77 +1,107 @@
 # SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
+
 import os
-from unittest.mock import patch
-from uuid import uuid4
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from haystack.dataclasses.document import ByteStream, Document
-from haystack.document_stores.errors import DuplicateDocumentError
+from haystack.document_stores.errors import DocumentStoreError, DuplicateDocumentError
 from haystack.document_stores.types import DuplicatePolicy
 from haystack.testing.document_store import FilterableDocsFixtureMixin
-from haystack.utils import Secret
-from pymongo import MongoClient
-from pymongo.driver_info import DriverInfo
 
 from haystack_integrations.document_stores.mongodb_atlas import MongoDBAtlasDocumentStore
 
 
-@patch("haystack_integrations.document_stores.mongodb_atlas.document_store.AsyncMongoClient")
-def test_init_is_lazy(_mock_client):
-    MongoDBAtlasDocumentStore(
-        mongo_connection_string=Secret.from_token("test"),
-        database_name="database_name",
-        collection_name="collection_name",
-        vector_search_index="cosine_index",
-        full_text_search_index="full_text_index",
-    )
+class TestEnsureConnectionSetupAsync:
+    async def test_raises_when_ping_fails(self, local_store):
+        with patch("haystack_integrations.document_stores.mongodb_atlas.document_store.AsyncMongoClient") as mock_cls:
+            mock_cls.return_value.admin.command = AsyncMock(side_effect=RuntimeError("nope"))
+            with pytest.raises(DocumentStoreError, match="Connection to MongoDB Atlas failed"):
+                await local_store._ensure_connection_setup_async()
 
-    _mock_client.assert_not_called()
+    async def test_raises_when_collection_missing(self, local_store):
+        with patch("haystack_integrations.document_stores.mongodb_atlas.document_store.AsyncMongoClient") as mock_cls:
+            client = mock_cls.return_value
+            client.admin.command = AsyncMock(return_value={"ok": 1})
+            db = MagicMock()
+            db.list_collection_names = AsyncMock(return_value=["other_collection"])
+            client.__getitem__.return_value = db
+            with pytest.raises(DocumentStoreError, match="does not exist"):
+                await local_store._ensure_connection_setup_async()
+
+
+class TestMongoDBDocumentStoreAsyncUnit:
+    async def test_get_metadata_fields_info(self, mocked_store_collection_async):
+        store, collection = mocked_store_collection_async
+        cursor = MagicMock()
+        collection.find.return_value = cursor
+        cursor.sort.return_value = cursor
+        cursor.limit.return_value = cursor
+        cursor.to_list = AsyncMock(
+            return_value=[
+                {"meta": {"category": "A", "number": 1, "ratio": 0.5}},
+                {"meta": {"category": "B", "is_valid": True}},
+            ]
+        )
+
+        fields_info = await store.get_metadata_fields_info_async()
+
+        assert fields_info["content"] == {"type": "text"}
+        assert fields_info["category"] == {"type": "keyword"}
+        assert fields_info["number"] == {"type": "long"}
+        assert fields_info["ratio"] == {"type": "float"}
+        assert fields_info["is_valid"] == {"type": "boolean"}
+
+    async def test_get_metadata_field_min_max(self, mocked_store_collection_async):
+        store, collection = mocked_store_collection_async
+        cursor = MagicMock()
+        cursor.to_list = AsyncMock(return_value=[{"min": 10, "max": 100}])
+        collection.aggregate = AsyncMock(return_value=cursor)
+
+        result = await store.get_metadata_field_min_max_async("number")
+
+        assert result == {"min": 10, "max": 100}
+        pipeline = collection.aggregate.call_args[0][0]
+        assert pipeline[0]["$group"]["min"] == {"$min": "$meta.number"}
+
+    async def test_get_metadata_field_unique_values(self, mocked_store_collection_async):
+        store, collection = mocked_store_collection_async
+        cursor = MagicMock()
+        cursor.to_list = AsyncMock(
+            return_value=[{"count": [{"count": 5}], "values": [{"_id": "val1"}, {"_id": "val2"}]}]
+        )
+        collection.aggregate = AsyncMock(return_value=cursor)
+
+        values, count = await store.get_metadata_field_unique_values_async("category", search_term="val", size=2)
+
+        assert values == ["val1", "val2"]
+        assert count == 5
+        pipeline = collection.aggregate.call_args[0][0]
+        assert pipeline[0]["$group"] == {"_id": "$meta.category"}
+        assert pipeline[1]["$match"] == {"_id": {"$regex": "val", "$options": "i"}}
+        assert pipeline[2]["$facet"]["values"][2]["$limit"] == 2
 
 
 @pytest.mark.skipif(not os.environ.get("MONGO_CONNECTION_STRING"), reason="No MongoDBAtlas connection string provided")
 @pytest.mark.integration
 class TestDocumentStoreAsync(FilterableDocsFixtureMixin):
     @pytest.fixture
-    async def document_store(self):
-        database_name = "haystack_integration_test"
-        collection_name = "test_collection_" + str(uuid4())
-        connection_string = os.environ["MONGO_CONNECTION_STRING"]
-
-        # We're using the sync client for setup/teardown ease
-        sync_client = MongoClient(connection_string, driver=DriverInfo(name="MongoDBAtlasHaystackIntegration"))
-
+    async def document_store(self, real_collection):
+        database_name, collection_name, _ = real_collection
         store = MongoDBAtlasDocumentStore(
             database_name=database_name,
             collection_name=collection_name,
             vector_search_index="cosine_index",
             full_text_search_index="full_text_index",
         )
+        await store._ensure_connection_setup_async()
         try:
-            database = sync_client[database_name]
-            if collection_name in database.list_collection_names():
-                database[collection_name].drop()
-            database.create_collection(collection_name)
-            database[collection_name].create_index("id", unique=True)
-
-            # Initialize the async connection before yielding
-            await store._ensure_connection_setup_async()
-
             yield store
         finally:
-            # Ensure async connection is closed before synchronous teardown
             if store._connection_async:
                 await store.connection.close()
-
-            # Synchronous teardown
-            if sync_client:
-                try:
-                    database = sync_client[database_name]
-                    if collection_name in database.list_collection_names():
-                        database[collection_name].drop()
-                finally:
-                    sync_client.close()
 
     async def test_write_documents_async(self, document_store: MongoDBAtlasDocumentStore):
         docs = [Document(content="some text")]
@@ -205,3 +235,94 @@ class TestDocumentStoreAsync(FilterableDocsFixtureMixin):
         new_docs = [Document(id="3", content="third doc")]
         await document_store.write_documents_async(new_docs)
         assert await document_store.count_documents_async() == 1
+
+    async def test_count_documents_by_filter_async(self, document_store: MongoDBAtlasDocumentStore):
+        docs = [
+            Document(content="Doc 1", meta={"category": "A", "status": "active"}),
+            Document(content="Doc 2", meta={"category": "B", "status": "active"}),
+            Document(content="Doc 3", meta={"category": "A", "status": "inactive"}),
+            Document(content="Doc 4", meta={"category": "A", "status": "active"}),
+        ]
+        await document_store.write_documents_async(docs)
+        assert await document_store.count_documents_async() == 4
+
+        count_a = await document_store.count_documents_by_filter_async(
+            filters={"field": "meta.category", "operator": "==", "value": "A"}
+        )
+        assert count_a == 3
+
+        count_active = await document_store.count_documents_by_filter_async(
+            filters={"field": "meta.status", "operator": "==", "value": "active"}
+        )
+        assert count_active == 3
+
+    async def test_count_unique_metadata_by_filter_async(self, document_store: MongoDBAtlasDocumentStore):
+        docs = [
+            Document(content="Doc 1", meta={"category": "A", "status": "active", "priority": 1}),
+            Document(content="Doc 2", meta={"category": "B", "status": "active", "priority": 2}),
+            Document(content="Doc 3", meta={"category": "A", "status": "inactive", "priority": 1}),
+            Document(content="Doc 4", meta={"category": "A", "status": "active", "priority": 3}),
+            Document(content="Doc 5", meta={"category": "C", "status": "active", "priority": 2}),
+        ]
+        await document_store.write_documents_async(docs)
+        assert await document_store.count_documents_async() == 5
+
+        distinct_counts_a = await document_store.count_unique_metadata_by_filter_async(
+            filters={"field": "meta.category", "operator": "==", "value": "A"},
+            metadata_fields=["category", "status", "priority"],
+        )
+        assert distinct_counts_a["category"] == 1
+        assert distinct_counts_a["status"] == 2
+        # Category A docs have priorities 1, 1, 3 -> 2 unique values
+        assert distinct_counts_a["priority"] == 2
+
+    async def test_get_metadata_fields_info_async(self, document_store: MongoDBAtlasDocumentStore):
+        docs = [
+            Document(content="Doc 1", meta={"category": "A", "number": 1, "ratio": 0.5}),
+            Document(content="Doc 2", meta={"category": "B", "is_valid": True}),
+        ]
+        await document_store.write_documents_async(docs)
+
+        fields_info = await document_store.get_metadata_fields_info_async()
+
+        assert fields_info["content"]["type"] == "text"
+        assert fields_info["category"]["type"] == "keyword"
+        assert fields_info["number"]["type"] == "long"
+        assert fields_info["ratio"]["type"] == "float"
+        assert fields_info["is_valid"]["type"] == "boolean"
+
+    async def test_get_metadata_field_min_max_async(self, document_store: MongoDBAtlasDocumentStore):
+        docs = [
+            Document(content="Doc 1", meta={"score": 10}),
+            Document(content="Doc 2", meta={"score": 100}),
+            Document(content="Doc 3", meta={"score": 20}),
+        ]
+        await document_store.write_documents_async(docs)
+
+        result = await document_store.get_metadata_field_min_max_async("score")
+        assert result["min"] == 10
+        assert result["max"] == 100
+
+    async def test_get_metadata_field_unique_values_async(self, document_store: MongoDBAtlasDocumentStore):
+        docs = [
+            Document(content="Doc 1", meta={"tag": "alpha"}),
+            Document(content="Doc 2", meta={"tag": "beta"}),
+            Document(content="Doc 3", meta={"tag": "gamma"}),
+            Document(content="Doc 4", meta={"tag": "alpha"}),
+        ]
+        await document_store.write_documents_async(docs)
+
+        values, total_count = await document_store.get_metadata_field_unique_values_async("tag")
+        assert total_count == 3
+        assert sorted(values) == ["alpha", "beta", "gamma"]
+
+        values_subset, count_subset = await document_store.get_metadata_field_unique_values_async(
+            "tag", search_term="b", from_=0, size=10
+        )
+        assert count_subset == 1
+        assert sorted(values_subset) == ["beta"]
+
+        values_page, count_page = await document_store.get_metadata_field_unique_values_async("tag", from_=1, size=1)
+        assert count_page == 3
+        assert len(values_page) == 1
+        assert values_page[0] in ["alpha", "beta", "gamma"]

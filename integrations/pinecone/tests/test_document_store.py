@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 import time
 from unittest.mock import patch
@@ -7,7 +11,22 @@ import pytest
 from haystack import Document
 from haystack.components.preprocessors import DocumentSplitter
 from haystack.components.retrievers import SentenceWindowRetriever
-from haystack.testing.document_store import CountDocumentsTest, DeleteDocumentsTest, WriteDocumentsTest
+from haystack.dataclasses import ByteStream, SparseEmbedding
+from haystack.document_stores.types import DuplicatePolicy
+from haystack.testing.document_store import (
+    CountDocumentsByFilterTest,
+    CountDocumentsTest,
+    CountUniqueMetadataByFilterTest,
+    DeleteAllTest,
+    DeleteByFilterTest,
+    DeleteDocumentsTest,
+    FilterableDocsFixtureMixin,
+    GetMetadataFieldMinMaxTest,
+    GetMetadataFieldsInfoTest,
+    GetMetadataFieldUniqueValuesTest,
+    UpdateByFilterTest,
+    WriteDocumentsTest,
+)
 from haystack.utils import Secret
 from pinecone import Pinecone, PodSpec, ServerlessSpec
 
@@ -95,6 +114,7 @@ def test_to_from_dict(mock_pinecone, monkeypatch):
             "batch_size": 50,
             "metric": "euclidean",
             "spec": {"serverless": {"region": "us-east-1", "cloud": "aws"}},
+            "show_progress": True,
         },
     }
     assert document_store.to_dict() == dict_output
@@ -107,6 +127,7 @@ def test_to_from_dict(mock_pinecone, monkeypatch):
     assert document_store.dimension == 60
     assert document_store.metric == "euclidean"
     assert document_store.spec == {"serverless": {"region": "us-east-1", "cloud": "aws"}}
+    assert document_store.show_progress is True
 
 
 def test_init_fails_wo_api_key(monkeypatch):
@@ -158,13 +179,13 @@ def test_discard_invalid_meta_invalid():
             ],
         },
     )
-    PineconeDocumentStore._discard_invalid_meta(invalid_metadata_doc)
+    result = PineconeDocumentStore._discard_invalid_meta(invalid_metadata_doc)
 
-    assert invalid_metadata_doc.meta["source_id"] == "62049ba1d1e1d5ebb1f6230b0b00c5356b8706c56e0b9c36b1dfc86084cd75f0"
-    assert invalid_metadata_doc.meta["page_number"] == 1
-    assert invalid_metadata_doc.meta["split_id"] == 0
-    assert invalid_metadata_doc.meta["split_idx_start"] == 0
-    assert "_split_overlap" not in invalid_metadata_doc.meta
+    assert result.meta["source_id"] == "62049ba1d1e1d5ebb1f6230b0b00c5356b8706c56e0b9c36b1dfc86084cd75f0"
+    assert result.meta["page_number"] == 1
+    assert result.meta["split_id"] == 0
+    assert result.meta["split_idx_start"] == 0
+    assert "_split_overlap" not in result.meta
 
 
 def test_discard_invalid_meta_valid():
@@ -175,10 +196,10 @@ def test_discard_invalid_meta_valid():
             "page_number": 1,
         },
     )
-    PineconeDocumentStore._discard_invalid_meta(valid_metadata_doc)
+    result = PineconeDocumentStore._discard_invalid_meta(valid_metadata_doc)
 
-    assert valid_metadata_doc.meta["source_id"] == "62049ba1d1e1d5ebb1f6230b0b00c5356b8706c56e0b9c36b1dfc86084cd75f0"
-    assert valid_metadata_doc.meta["page_number"] == 1
+    assert result.meta["source_id"] == "62049ba1d1e1d5ebb1f6230b0b00c5356b8706c56e0b9c36b1dfc86084cd75f0"
+    assert result.meta["page_number"] == 1
 
 
 def test_convert_meta_to_int():
@@ -211,9 +232,135 @@ def test_convert_meta_to_int():
     assert PineconeDocumentStore._convert_meta_to_int(meta_data) == {}
 
 
+@pytest.mark.parametrize(
+    ("documents", "expected", "warning_fragment"),
+    [
+        ([], {}, None),
+        (
+            [Document(content="hello", meta={"flag": True})],
+            {"content": {"type": "text"}, "flag": {"type": "boolean"}},
+            None,
+        ),
+        (
+            [Document(content=None, meta={"tags": ["a", "b"]})],
+            {"tags": {"type": "keyword"}},
+            None,
+        ),
+        (
+            [Document(content=None, meta={"counts": [1, 2]})],
+            {"counts": {"type": "long"}},
+            None,
+        ),
+        (
+            [Document(content=None, meta={"empty": []})],
+            {"empty": {"type": "keyword"}},
+            None,
+        ),
+        (
+            [Document(content=None, meta={"pi": 3.14})],
+            {"pi": {"type": "long"}},
+            None,
+        ),
+        (
+            [
+                Document(content=None, meta={"value": 1}),
+                Document(content=None, meta={"value": "two"}),
+            ],
+            {"value": {"type": "keyword"}},
+            "mixed types",
+        ),
+    ],
+)
+def test_get_metadata_fields_info_impl_type_inference(documents, expected, warning_fragment, caplog):
+    with caplog.at_level("WARNING"):
+        result = PineconeDocumentStore._get_metadata_fields_info_impl(documents)
+    assert result == expected
+    if warning_fragment:
+        assert warning_fragment in caplog.text
+
+
+def test_get_metadata_field_min_max_impl_strips_meta_prefix_and_errors():
+    docs = [
+        Document(content="a", meta={"priority": 1}),
+        Document(content="b", meta={"priority": 5}),
+    ]
+    assert PineconeDocumentStore._get_metadata_field_min_max_impl(docs, "meta.priority") == {"min": 1, "max": 5}
+
+    with pytest.raises(ValueError, match="No values found"):
+        PineconeDocumentStore._get_metadata_field_min_max_impl(docs, "missing")
+
+
+def test_get_metadata_field_unique_values_impl_pagination_search_and_lists():
+    docs = [
+        Document(content="a", meta={"tags": ["python", "java"]}),
+        Document(content="b", meta={"tags": ["rust", "go"]}),
+        Document(content="c", meta={"tags": ["python"]}),
+    ]
+
+    values, total = PineconeDocumentStore._get_metadata_field_unique_values_impl(
+        docs, "tags", search_term=None, from_=0, size=10
+    )
+    assert total == 4
+    assert values == ["go", "java", "python", "rust"]
+
+    values, total = PineconeDocumentStore._get_metadata_field_unique_values_impl(
+        docs, "tags", search_term=None, from_=1, size=2
+    )
+    assert total == 4
+    assert values == ["java", "python"]
+
+    values, total = PineconeDocumentStore._get_metadata_field_unique_values_impl(
+        docs, "tags", search_term="PY", from_=0, size=10
+    )
+    assert total == 1
+    assert values == ["python"]
+
+
+def test_prepare_documents_for_writing_edge_cases(caplog):
+    ds = PineconeDocumentStore(api_key=Secret.from_token("fake-api-key"))
+
+    with pytest.raises(ValueError, match="must contain a list of objects of type Document"):
+        ds._prepare_documents_for_writing(["not-a-document"], policy=DuplicatePolicy.NONE)
+
+    docs = [
+        Document(content="no-embedding"),
+        Document(content="with-blob", embedding=[0.1] * 768, blob=ByteStream(data=b"data")),
+        Document(
+            content="with-sparse",
+            embedding=[0.1] * 768,
+            sparse_embedding=SparseEmbedding(indices=[0], values=[1.0]),
+        ),
+    ]
+    with caplog.at_level("WARNING"):
+        result = ds._prepare_documents_for_writing(docs, policy=DuplicatePolicy.SKIP)
+
+    assert len(result) == 3
+    assert result[0][1] == ds._dummy_vector
+    assert "only supports `DuplicatePolicy.OVERWRITE`" in caplog.text
+    assert "has no embedding" in caplog.text
+    assert "blob" in caplog.text
+    assert "sparse_embedding" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_validation_errors_on_empty_query_and_non_dict_meta():
+    ds = PineconeDocumentStore(api_key=Secret.from_token("fake-api-key"))
+    filters = {"field": "meta.category", "operator": "==", "value": "A"}
+
+    with pytest.raises(ValueError, match="query_embedding must be a non-empty list"):
+        ds._embedding_retrieval(query_embedding=[])
+    with pytest.raises(ValueError, match="query_embedding must be a non-empty list"):
+        await ds._embedding_retrieval_async(query_embedding=[])
+
+    with pytest.raises(ValueError, match="meta must be a dictionary"):
+        ds.update_by_filter(filters=filters, meta="not-a-dict")
+    with pytest.raises(ValueError, match="meta must be a dictionary"):
+        await ds.update_by_filter_async(filters=filters, meta="not-a-dict")
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(not os.environ.get("PINECONE_API_KEY"), reason="PINECONE_API_KEY not set")
-def test_serverless_index_creation_from_scratch(sleep_time):
+def test_serverless_index_creation_from_scratch(delete_sleep_time):
     # we use a fixed index name to avoid hitting the limit of Pinecone's free tier (max 5 indexes)
     # the index name is defined in the test matrix of the GitHub Actions workflow
     # the default value is provided for local testing
@@ -225,7 +372,7 @@ def test_serverless_index_creation_from_scratch(sleep_time):
     except Exception:  # noqa S110
         pass
 
-    time.sleep(sleep_time)
+    time.sleep(delete_sleep_time)
 
     ds = PineconeDocumentStore(
         index=index_name,
@@ -234,6 +381,7 @@ def test_serverless_index_creation_from_scratch(sleep_time):
         dimension=30,
         metric="euclidean",
         spec={"serverless": {"region": "us-east-1", "cloud": "aws"}},
+        show_progress=False,
     )
     # Trigger the connection
     _ = ds._initialize_index()
@@ -253,7 +401,20 @@ def test_serverless_index_creation_from_scratch(sleep_time):
 
 @pytest.mark.integration
 @pytest.mark.skipif(not os.environ.get("PINECONE_API_KEY"), reason="PINECONE_API_KEY not set")
-class TestDocumentStore(CountDocumentsTest, DeleteDocumentsTest, WriteDocumentsTest):
+class TestDocumentStore(
+    CountDocumentsTest,
+    DeleteDocumentsTest,
+    WriteDocumentsTest,
+    FilterableDocsFixtureMixin,
+    UpdateByFilterTest,
+    DeleteAllTest,
+    DeleteByFilterTest,
+    CountDocumentsByFilterTest,
+    CountUniqueMetadataByFilterTest,
+    GetMetadataFieldsInfoTest,
+    GetMetadataFieldMinMaxTest,
+    GetMetadataFieldUniqueValuesTest,
+):
     def test_write_documents(self, document_store: PineconeDocumentStore):
         docs = [Document(id="1")]
         assert document_store.write_documents(docs) == 1
@@ -271,19 +432,6 @@ class TestDocumentStore(CountDocumentsTest, DeleteDocumentsTest, WriteDocumentsT
 
     @pytest.mark.skip(reason="Pinecone creates a namespace only when the first document is written")
     def test_delete_documents_empty_document_store(self, document_store: PineconeDocumentStore): ...
-
-    def test_delete_all_documents(self, document_store: PineconeDocumentStore):
-        docs = [Document(content="first doc"), Document(content="second doc")]
-        document_store.write_documents(docs)
-        assert document_store.count_documents() == 2
-
-        document_store.delete_all_documents()
-        assert document_store.count_documents() == 0
-
-    def test_delete_all_documents_empty_collection(self, document_store: PineconeDocumentStore):
-        assert document_store.count_documents() == 0
-        document_store.delete_all_documents()
-        assert document_store.count_documents() == 0
 
     def test_embedding_retrieval(self, document_store: PineconeDocumentStore):
         query_embedding = [0.1] * 768
@@ -342,3 +490,104 @@ class TestDocumentStore(CountDocumentsTest, DeleteDocumentsTest, WriteDocumentsT
         result = sentence_window_retriever.run(retrieved_documents=[retrieved_doc["documents"][0]])
 
         assert len(result["context_windows"]) == 1
+
+    def test_get_metadata_fields_info_consistent_types(self, document_store: PineconeDocumentStore):
+        # Test that all documents are checked for type consistency
+        docs = [
+            Document(content="Doc 1", meta={"score": 85}),
+            Document(content="Doc 2", meta={"score": 90}),
+            Document(content="Doc 3", meta={"score": 78}),
+        ]
+        document_store.write_documents(docs)
+
+        field_info = document_store.get_metadata_fields_info()
+        assert "score" in field_info
+        assert field_info["score"]["type"] == "long"
+
+    def test_get_metadata_field_min_max_boolean_and_string(self, document_store: PineconeDocumentStore):
+        docs = [
+            Document(content="Doc 1", meta={"priority": 1, "score": 85.5, "active": True, "category": "Zebra"}),
+            Document(content="Doc 2", meta={"priority": 5, "score": 92.3, "active": False, "category": "Alpha"}),
+            Document(content="Doc 3", meta={"priority": 3, "score": 78.9, "active": True, "category": "Beta"}),
+            Document(content="Doc 4", meta={"priority": 7, "score": 95.1, "active": False, "category": "Gamma"}),
+        ]
+        document_store.write_documents(docs)
+
+        # Get min/max for boolean field
+        min_max = document_store.get_metadata_field_min_max("active")
+        assert min_max["min"] is False
+        assert min_max["max"] is True
+
+        # Get min/max for string field (alphabetical ordering)
+        min_max = document_store.get_metadata_field_min_max("category")
+        assert min_max["min"] == "Alpha"
+        assert min_max["max"] == "Zebra"
+
+    def test_get_metadata_field_min_max_empty_collection(self, document_store: PineconeDocumentStore):
+        assert document_store.count_documents() == 0
+        with pytest.raises(ValueError, match="No values found"):
+            document_store.get_metadata_field_min_max("priority")
+
+    def test_get_metadata_field_min_max_no_values(self, document_store: PineconeDocumentStore):
+        docs = [
+            Document(content="Doc 1", meta={"tags": ["tag1", "tag2"]}),
+            Document(content="Doc 2", meta={"tags": ["tag3", "tag4"]}),
+        ]
+        document_store.write_documents(docs)
+
+        # Try to get min/max for unsupported field type (list)
+        with pytest.raises(ValueError, match="No values found"):
+            document_store.get_metadata_field_min_max("tags")
+
+        # Try to get min/max for non-existent field
+        with pytest.raises(ValueError, match="No values found"):
+            document_store.get_metadata_field_min_max("nonexistent")
+
+    def test_get_metadata_field_unique_values(self, document_store: PineconeDocumentStore):
+        docs = [
+            Document(content="Doc 1", meta={"category": "Alpha"}),
+            Document(content="Doc 2", meta={"category": "Beta"}),
+            Document(content="Doc 3", meta={"category": "Gamma"}),
+            Document(content="Doc 4", meta={"category": "Alpha"}),
+            Document(content="Doc 5", meta={"category": "Delta"}),
+            Document(content="Doc 6", meta={"category": "Beta"}),
+        ]
+        document_store.write_documents(docs)
+
+        # Get all unique values
+        values, total = document_store.get_metadata_field_unique_values("category", from_=0, size=10)
+        assert total == 4  # Alpha, Beta, Delta, Gamma
+        assert len(values) == 4
+        assert set(values) == {"Alpha", "Beta", "Delta", "Gamma"}
+
+        # Test pagination
+        values, total = document_store.get_metadata_field_unique_values("category", from_=0, size=2)
+        assert total == 4
+        assert len(values) == 2  # First 2 values (alphabetically sorted)
+
+        values, total = document_store.get_metadata_field_unique_values("category", from_=2, size=2)
+        assert total == 4
+        assert len(values) == 2  # Next 2 values
+
+        # Test search term
+        values, total = document_store.get_metadata_field_unique_values("category", search_term="ta", size=10)
+        assert total == 2  # Beta and Delta contain "ta"
+        assert set(values) == {"Beta", "Delta"}
+
+        # Test case-insensitive search
+        values, total = document_store.get_metadata_field_unique_values("category", search_term="ALPHA", size=10)
+        assert total == 1
+        assert values == ["Alpha"]
+
+    def test_get_metadata_field_unique_values_with_lists(self, document_store: PineconeDocumentStore):
+        docs = [
+            Document(content="Doc 1", meta={"tags": ["python", "java"]}),
+            Document(content="Doc 2", meta={"tags": ["python", "rust"]}),
+            Document(content="Doc 3", meta={"tags": ["java", "go"]}),
+        ]
+        document_store.write_documents(docs)
+
+        # Get unique tag values
+        values, total = document_store.get_metadata_field_unique_values("tags", size=10)
+        assert total == 4  # python, java, rust, go
+        assert set(values) == {"go", "java", "python", "rust"}

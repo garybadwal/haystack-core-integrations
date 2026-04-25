@@ -1,14 +1,87 @@
 # Changelog
 
+## [integrations/azure_ai_search-v3.2.0] - 2026-03-30
+
+### 🚀 Features
+
+- Add support for Azure `TokenCredentials` to `AzureAISearchDocumentStore` (#3014)
+
+### 🚜 Refactor
+
+- Weaviate, chroma, elasticsearch, opensearch, azure_ai_search use `_normalize_metadata_field_name` from haystack.utils (#2953)
+
+### 🧪 Testing
+
+- Test compatible integrations with python 3.14; update pyproject (#3001)
+- `AzureAISearchDocumentStore` use Mixin tests (#3031)
+
+### 🧹 Chores
+
+- Add missing type annotations and docstrings to azure_ai_search (#2975)
+- Enforce ruff docstring rules (D102/D103/D205/D209/D213/D417/D419) in first 10 integrations (#3008)
+
+
+## [integrations/azure_ai_search-v3.1.0] - 2026-03-02
+
+### 🚀 Features
+
+- Add Azure AI Search document store metadata ops (#2903)
+
+### 📚 Documentation
+
+- Simplify pydoc configs (#2855)
+
+### 🧪 Testing
+
+- Replacing each `DocumentStore` specific tests and used the generalised ones from `haystack.testing.document_store` (#2812)
+
+### 🧹 Chores
+
+- Remove unused allow-direct-references (#2866)
+- Standardize author mentions (#2897)
+
+
+## [integrations/azure_ai_search-v3.0.0] - 2026-01-09
+
+
+### 🧹 Chores
+
+- Make fmt command more forgiving (#2671)
+- [**breaking**] Azure_ai_search - drop Python 3.9 and use X|Y typing (#2695)
+
+## [integrations/azure_ai_search-v2.3.3] - 2025-12-10
+
+### 🚀 Features
+
+- Adding updated/delete by filter + tests to `AzureAISearchDocument Store` (#2586)
+
+
+### 🧪 Testing
+
+- Fix the failing test for Azure AI (#2579)
+
+### 🧹 Chores
+
+- Remove Readme API CI workflow and configs (#2573)
+
+### 🌀 Miscellaneous
+
+- Adopt PEP 585 type hinting (part 1) (#2509)
+
 ## [integrations/azure_ai_search-v2.3.2] - 2025-11-11
 
 ### 🚀 Features
 
 - Delete all documents for AzureAISearch DocumentStore (#2404)
 
+### 📚 Documentation
+
+- Add pydoc configurations for Docusaurus (#2411)
+- Fix docstrings to avoid errors in API reference generation (#2423)
+
 ### ⚙️ CI
 
-- Adopt PEP 585 type hinting (#2475)
+- Change pytest command (#2475)
 
 
 ## [integrations/azure_ai_search-v2.3.1] - 2025-10-10
