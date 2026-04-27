@@ -1,4 +1,9 @@
 # Integrations
+integration:alloydb:
+  - changed-files:
+      - any-glob-to-any-file: "integrations/alloydb/**/*"
+      - any-glob-to-any-file: ".github/workflows/alloydb.yml"
+
 integration:aimlapi:
   - changed-files:
       - any-glob-to-any-file: "integrations/aimlapi/**/*"
