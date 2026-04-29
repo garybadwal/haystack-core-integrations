@@ -1068,7 +1068,6 @@ class AlloyDBDocumentStore:
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
             language=SQLLiteral(self.language),
-            query=SQLLiteral(query),
         )
 
         where_params: tuple = ()
