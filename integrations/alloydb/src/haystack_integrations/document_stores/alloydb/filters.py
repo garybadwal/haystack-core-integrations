@@ -247,6 +247,11 @@ def _like(field: Composable, value: Any) -> tuple[Composed, Any]:
         raise FilterError(msg)
     return SQL("{} LIKE %s").format(field), value
 
+def _not_like(field: Composable, value: Any) -> tuple[Composed, Any]:
+  if not isinstance(value, str):
+      msg = f"{field}'s value must be a str when using 'not like'"
+      raise FilterError(msg)
+  return SQL("{} NOT LIKE %s").format(field), value
 
 COMPARISON_OPERATORS = {
     "==": _equal,
@@ -257,5 +262,6 @@ COMPARISON_OPERATORS = {
     "<=": _less_than_equal,
     "in": _in,
     "not in": _not_in,
-    "LIKE": _like,
+    "like": _like,
+    "not like": _not_like
 }
