@@ -1059,7 +1059,7 @@ class AlloyDBDocumentStore:
         return AlloyDBDocumentStore._analyze_metadata_fields_from_records(records)
 
     def _build_keyword_retrieval_query(
-        self, query: str, top_k: int, filters: dict[str, Any] | None = None
+        self, top_k: int, filters: dict[str, Any] | None = None
     ) -> tuple[Composed, tuple]:
         """
         Builds the SQL query and the where parameters for keyword retrieval.
@@ -1102,7 +1102,7 @@ class AlloyDBDocumentStore:
             msg = "query must be a non-empty string"
             raise ValueError(msg)
 
-        sql_query, where_params = self._build_keyword_retrieval_query(query=query, top_k=top_k, filters=filters)
+        sql_query, where_params = self._build_keyword_retrieval_query(top_k=top_k, filters=filters)
 
         self._ensure_db_setup()
         assert self._dict_cursor is not None
