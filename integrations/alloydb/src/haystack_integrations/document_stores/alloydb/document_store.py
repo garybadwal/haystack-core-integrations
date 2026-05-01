@@ -1208,24 +1208,56 @@ class AlloyDBDocumentStore:
         records = result.fetchall()
         return _from_pg_to_haystack_documents(records)
 
+    def _build_min_max_query(self, normalized_field: str, field_type: str) -> Composed:
+        """
+        Builds the SQL query for getting min/max values based on the field type.
+
+        :param normalized_field: The normalized metadata field name.
+        :param field_type: The type of the field (integer, real, text, or boolean).
+        :returns: The SQL query for min/max calculation.
+        """
+        field_literal = SQLLiteral(normalized_field)
+
+        if field_type == "integer":
+            cast = SQL("::integer")
+            extractor = SQL("(meta->>{}){}").format(field_literal, cast)
+        elif field_type == "real":
+            cast = SQL("::real")
+            extractor = SQL("(meta->>{}){}").format(field_literal, cast)
+        else:
+            extractor = SQL('meta->>{} COLLATE "C"').format(field_literal)
+
+        return SQL(
+            "SELECT MIN({extractor}) AS min_value, MAX({extractor}) AS max_value "
+            "FROM {schema_name}.{table_name} WHERE meta->>{field} IS NOT NULL"
+        ).format(
+            extractor=extractor,
+            schema_name=Identifier(self.schema_name),
+            table_name=Identifier(self.table_name),
+            field=field_literal,
+        )
+
     def get_metadata_field_min_max(self, field: str) -> dict[str, Any]:
         """
         Returns the minimum and maximum values for a metadata field.
 
+        For numeric fields (integer, real), returns numeric min/max.
+        For text and other non-numeric fields, returns lexicographic min/max
+        using the `"C"` collation.
+
         :param field: The metadata field name (with or without the "meta." prefix).
-        :returns: A dictionary with `min` and `max` keys.
+        :returns: A dictionary with `min` and `max` keys. Returns
+            `{"min": None, "max": None}` when the field has no values or the
+            store is empty.
         """
         normalized_field = self._normalize_metadata_field_name(field)
-        field_literal = SQLLiteral(normalized_field)
 
-        sql_query = SQL(
-            "SELECT MIN(meta->>{field}) AS min_value, MAX(meta->>{field}) AS max_value "
-            "FROM {schema_name}.{table_name} WHERE meta->>{field} IS NOT NULL"
-        ).format(
-            field=field_literal,
-            schema_name=Identifier(self.schema_name),
-            table_name=Identifier(self.table_name),
-        )
+        fields_info = self.get_metadata_fields_info()
+        if normalized_field not in fields_info:
+            return {"min": None, "max": None}
+
+        field_type = fields_info[normalized_field]["type"]
+        sql_query = self._build_min_max_query(normalized_field, field_type)
 
         self._ensure_db_setup()
         assert self._dict_cursor is not None
