@@ -77,6 +77,9 @@ class AlloyDBDocumentStore(DocumentStore):
     which provides TLS encryption and IAM-based authorization without requiring manual SSL certificate
     management, firewall rules, or IP allowlisting.
 
+    **Filter limitations**: the `NOT` logical operator is not supported. Use `!=` or `not in`
+    comparison operators to express negation.
+
     Usage example:
     ```python
     import os
@@ -614,6 +617,11 @@ class AlloyDBDocumentStore(DocumentStore):
 
         For a detailed specification of the filters,
         refer to the [documentation](https://docs.haystack.deepset.ai/docs/metadata-filtering)
+
+        **Filter operator support**: comparison operators (`==`, `!=`, `>`, `>=`, `<`, `<=`, `in`,
+        `not in`, `like`, `not like`) and logical operators `AND` and `OR` are fully supported.
+        The `NOT` logical operator is **not** supported — use `!=` or `not in` comparison
+        operators instead.
 
         :param filters: The filters to apply to the document list.
 
