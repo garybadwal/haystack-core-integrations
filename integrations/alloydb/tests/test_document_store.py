@@ -72,6 +72,7 @@ class TestDocumentStore(
         retrieved_docs = document_store.filter_documents()
         assert retrieved_docs == docs
 
+
 @pytest.mark.usefixtures("patches_for_unit_tests")
 def test_init(monkeypatch):
     monkeypatch.setenv(
