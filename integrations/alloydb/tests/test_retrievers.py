@@ -14,7 +14,7 @@ class TestEmbeddingRetriever:
     def test_init_default(self, mock_store):
         retriever = AlloyDBEmbeddingRetriever(document_store=mock_store)
         assert retriever.document_store == mock_store
-        assert retriever.filters is None
+        assert retriever.filters == {}
         assert retriever.top_k == 10
         assert retriever.vector_function is None
 
@@ -130,7 +130,7 @@ class TestKeywordRetriever:
     def test_init_default(self, mock_store):
         retriever = AlloyDBKeywordRetriever(document_store=mock_store)
         assert retriever.document_store == mock_store
-        assert retriever.filters is None
+        assert retriever.filters == {}
         assert retriever.top_k == 10
 
     def test_init(self, mock_store):
