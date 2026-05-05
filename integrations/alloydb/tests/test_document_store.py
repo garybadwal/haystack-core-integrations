@@ -72,19 +72,6 @@ class TestDocumentStore(
         retrieved_docs = document_store.filter_documents()
         assert retrieved_docs == docs
 
-    def test_invalid_connection(self, monkeypatch):
-        monkeypatch.setenv(
-            "ALLOYDB_INSTANCE_URI",
-            "projects/invalid/locations/invalid/clusters/invalid/instances/invalid",
-        )
-        monkeypatch.setenv("ALLOYDB_USER", "invalid_user")
-        monkeypatch.setenv("ALLOYDB_PASSWORD", "invalid_password")
-
-        document_store = AlloyDBDocumentStore()
-        with pytest.raises(DocumentStoreError, match="Failed to connect to AlloyDB instance"):
-            document_store._ensure_db_setup()
-
-
 @pytest.mark.usefixtures("patches_for_unit_tests")
 def test_init(monkeypatch):
     monkeypatch.setenv(

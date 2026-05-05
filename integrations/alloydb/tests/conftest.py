@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from unittest.mock import Mock, patch
 
 import pytest
@@ -11,7 +12,7 @@ from haystack_integrations.document_stores.alloydb import AlloyDBDocumentStore
 
 
 @pytest.fixture
-def document_store(request, monkeypatch):
+def document_store(request):
     """
     Integration-test fixture that creates a real AlloyDB connection.
 
@@ -21,12 +22,12 @@ def document_store(request, monkeypatch):
     - ALLOYDB_PASSWORD (unless enable_iam_auth=True)
     - ALLOYDB_DB (optional, defaults to "postgres")
     """
-    monkeypatch.setenv(
-        "ALLOYDB_INSTANCE_URI",
-        "projects/test-project/locations/us-central1/clusters/test-cluster/instances/test-instance",
-    )
-    monkeypatch.setenv("ALLOYDB_USER", "postgres")
-    monkeypatch.setenv("ALLOYDB_PASSWORD", "postgres")
+    url = os.environ.get("ALLOYDB_INSTANCE_URI")
+    api_key = os.environ.get("ALLOYDB_USER")
+    inference_id = os.environ.get("ALLOYDB_PASSWORD")
+
+    if not all([url, api_key, inference_id]):
+        pytest.skip("Set ALLOYDB_INSTANCE_URI, ALLOYDB_USER and ALLOYDB_PASSWORD to run integration tests")
 
     table_name = f"haystack_{request.node.name}"
     store = AlloyDBDocumentStore(
