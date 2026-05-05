@@ -7,7 +7,7 @@ from typing import Any, Literal, overload
 from haystack import default_from_dict, default_to_dict, logging
 from haystack.dataclasses.document import Document
 from haystack.document_stores.errors import DocumentStoreError, DuplicateDocumentError
-from haystack.document_stores.types import DuplicatePolicy
+from haystack.document_stores.types import DocumentStore, DuplicatePolicy
 from haystack.utils.auth import Secret, deserialize_secrets_inplace
 from pgvector.psycopg import register_vector
 from psycopg import Connection, Cursor, Error, IntegrityError
@@ -65,7 +65,7 @@ VECTOR_FUNCTION_TO_POSTGRESQL_OPS = {
 HNSW_INDEX_CREATION_VALID_KWARGS = ["m", "ef_construction"]
 
 
-class AlloyDBDocumentStore:
+class AlloyDBDocumentStore(DocumentStore):
     """
     A Document Store backed by [Google Cloud AlloyDB](https://cloud.google.com/alloydb).
 
