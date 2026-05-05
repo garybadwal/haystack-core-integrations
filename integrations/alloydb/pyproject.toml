@@ -180,4 +180,7 @@ show_missing = true
 exclude_lines = ["no cov", "if __name__ == .__main__.:", "if TYPE_CHECKING:"]
 
 [tool.pytest.ini_options]
-markers = ["integration: integration tests"]
+markers = [
+  "unit: unit tests (no live service required)",
+  "integration: integration tests (require a live AlloyDB instance)",
+]
