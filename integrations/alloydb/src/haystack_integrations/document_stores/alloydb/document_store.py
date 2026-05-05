@@ -662,7 +662,7 @@ class AlloyDBDocumentStore(DocumentStore):
 
         return sql_insert
 
-    def write_documents(self, documents: list[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE) -> int:
+    def write_documents(self, documents: list[Document], policy: DuplicatePolicy = DuplicatePolicy.FAIL) -> int:
         """
         Writes documents to the document store.
 
@@ -678,9 +678,6 @@ class AlloyDBDocumentStore(DocumentStore):
             if not isinstance(documents[0], Document):
                 msg = "param 'documents' must contain a list of objects of type Document"
                 raise ValueError(msg)
-
-        if policy == DuplicatePolicy.NONE:
-            policy = DuplicatePolicy.FAIL
 
         db_documents = _from_haystack_to_pg_documents(documents)
         sql_insert = self._build_insert_statement(policy)
