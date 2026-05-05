@@ -724,12 +724,9 @@ class AlloyDBDocumentStore:
         if not document_ids:
             return
 
-        document_ids_str = ", ".join(f"'{document_id}'" for document_id in document_ids)
-
-        delete_sql = SQL("DELETE FROM {schema_name}.{table_name} WHERE id IN ({document_ids_str})").format(
+        delete_sql = SQL("DELETE FROM {schema_name}.{table_name} WHERE id = ANY(%s)").format(
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
-            document_ids_str=SQL(document_ids_str),
         )
 
         self._ensure_db_setup()
@@ -737,6 +734,7 @@ class AlloyDBDocumentStore:
         self._execute_sql(
             cursor=self._cursor,
             sql_query=delete_sql,
+            params=(document_ids,),
             error_msg="Could not delete documents from AlloyDBDocumentStore",
         )
 
