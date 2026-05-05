@@ -23,10 +23,10 @@ def document_store(request):
     - ALLOYDB_DB (optional, defaults to "postgres")
     """
     url = os.environ.get("ALLOYDB_INSTANCE_URI")
-    api_key = os.environ.get("ALLOYDB_USER")
-    inference_id = os.environ.get("ALLOYDB_PASSWORD")
+    user = os.environ.get("ALLOYDB_USER")
+    password = os.environ.get("ALLOYDB_PASSWORD")
 
-    if not all([url, api_key, inference_id]):
+    if not all([url, user, password]):
         pytest.skip("Set ALLOYDB_INSTANCE_URI, ALLOYDB_USER and ALLOYDB_PASSWORD to run integration tests")
 
     table_name = f"haystack_{request.node.name}"

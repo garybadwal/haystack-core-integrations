@@ -233,3 +233,17 @@ def test_close_is_idempotent(mock_store):
     """Calling close() multiple times should not raise."""
     mock_store.close()
     mock_store.close()
+
+
+def test_init_is_lazy(monkeypatch):
+    """Constructing the store must not open a database connection."""
+    monkeypatch.setenv("ALLOYDB_INSTANCE_URI", "projects/p/locations/r/clusters/c/instances/i")
+    monkeypatch.setenv("ALLOYDB_USER", "my-user")
+    monkeypatch.setenv("ALLOYDB_PASSWORD", "my-password")
+
+    store = AlloyDBDocumentStore()
+
+    assert store._connection is None
+    assert store._cursor is None
+    assert store._dict_cursor is None
+    assert store._connector is None
